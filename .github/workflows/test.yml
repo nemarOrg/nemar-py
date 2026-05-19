@@ -1,0 +1,99 @@
+name: Unit and integration tests
+
+on:
+  pull_request:
+    branches: ["**"]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"  # Monday 06:00 UTC: weekly live smoke
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install ruff
+      - run: ruff check
+      - run: ruff format --check
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e . pyright
+      - run: pyright src/nemar
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e . pytest pytest-cov pytest-httpserver trustme hypothesis
+      - run: pytest -m "not e2e and not live" --cov=nemar --cov-fail-under=94
+
+  test-aria2:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: sudo apt-get update && sudo apt-get install -y aria2
+      - run: pip install -e . pytest pytest-httpserver trustme hypothesis
+      - run: pytest -m "aria2 and e2e"
+
+  test-cli-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e . pytest pytest-httpserver trustme hypothesis
+      - run: pytest -m "e2e and not aria2 and not live"
+
+  build-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install build
+      - run: python -m build
+      - run: pip install dist/*.whl
+      - run: python -c "import nemar; print(nemar.__version__)"
+      - run: nemar-py --help
+
+  test-live-smoke:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e . pytest pytest-httpserver trustme hypothesis
+      - env:
+          NEMAR_LIVE_TEST: "1"
+        run: pytest -m live
