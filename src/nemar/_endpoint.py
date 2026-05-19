@@ -41,9 +41,7 @@ class DataEndpoint:
         """Parse, validate, and normalize a data endpoint URL.
 
         Validates that the URL uses HTTPS, normalizes any number of trailing
-        slashes to exactly one, and caches the scheme + netloc. The error
-        wording matches the pre-existing ``_validate_download_options``
-        message so callers (and tests) that depended on it stay green.
+        slashes to exactly one, and caches the scheme + netloc.
         """
         # Preserve the historic wording so existing tests keep matching.
         if not raw.startswith("https://"):

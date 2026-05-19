@@ -254,11 +254,10 @@ def fetch_dataset_index(
     max_retries: int = 5,
 ) -> DatasetIndex:
     """Return the version index advertised by the NEMAR data endpoint."""
-    _validate_endpoint_query_options(
-        dataset=dataset,
-        data_url=data_url,
-        max_retries=max_retries,
-    )
+    if not DATASET_ID_RE.fullmatch(dataset):
+        raise ValueError('dataset must look like "nm000132".')
+    if max_retries < 0:
+        raise ValueError("max_retries must be non-negative.")
     endpoint = DataEndpoint.from_url(data_url)
     with httpx.Client(
         follow_redirects=True,
@@ -291,37 +290,6 @@ def list_dataset_versions(
         metadata_timeout=metadata_timeout,
         max_retries=max_retries,
     ).versions
-
-
-def _validate_download_options(
-    *,
-    dataset: str,
-    downloader: str,
-    max_retries: int,
-    max_concurrent_downloads: int,
-    data_url: str,
-) -> None:
-    if not DATASET_ID_RE.fullmatch(dataset):
-        raise ValueError('dataset must look like "nm000132".')
-    if downloader not in {"auto", "aria2", "python"}:
-        raise ValueError('downloader must be one of "auto", "aria2", or "python".')
-    if max_retries < 0:
-        raise ValueError("max_retries must be non-negative.")
-    if max_concurrent_downloads < 1:
-        raise ValueError("max_concurrent_downloads must be at least 1.")
-    # Validates HTTPS and normalizes the trailing slash; we discard the value
-    # here because the caller re-builds the endpoint in ``download``.
-    DataEndpoint.from_url(data_url)
-
-
-def _validate_endpoint_query_options(
-    *, dataset: str, data_url: str, max_retries: int
-) -> None:
-    if not DATASET_ID_RE.fullmatch(dataset):
-        raise ValueError('dataset must look like "nm000132".')
-    if max_retries < 0:
-        raise ValueError("max_retries must be non-negative.")
-    DataEndpoint.from_url(data_url)
 
 
 def _normalize_data_url(data_url: str) -> str:

@@ -456,8 +456,10 @@ def test_download_orchestrates_manifest_selection_and_transfer(
         ({"data_url": "http://data.nemar.org/"}, "HTTPS"),
     ],
 )
-def test_validate_download_options(kwargs, message) -> None:
-    """Download option validation rejects unsafe or unsupported values."""
+def test_download_request_validates_options(kwargs, message) -> None:
+    """``DownloadRequest.from_kwargs`` rejects unsafe or unsupported values."""
+    from nemar._request import DownloadRequest
+
     valid = {
         "dataset": "nm000132",
         "downloader": "python",
@@ -468,7 +470,7 @@ def test_validate_download_options(kwargs, message) -> None:
     valid.update(kwargs)
 
     with pytest.raises(ValueError, match=message):
-        _download._validate_download_options(**valid)
+        DownloadRequest.from_kwargs(**valid)
 
 
 @pytest.mark.parametrize(
@@ -479,8 +481,10 @@ def test_validate_download_options(kwargs, message) -> None:
         pytest.param({"data_url": "http://data.nemar.org/"}, "HTTPS", id="http-url"),
     ],
 )
-def test_validate_endpoint_query_options(kwargs, message) -> None:
-    """Endpoint-only commands reject unsafe or unsupported values."""
+def test_fetch_dataset_index_validates_options(kwargs, message) -> None:
+    """``fetch_dataset_index`` rejects unsafe or unsupported values."""
+    from nemar import fetch_dataset_index
+
     valid = {
         "dataset": "nm000132",
         "max_retries": 1,
@@ -489,7 +493,7 @@ def test_validate_endpoint_query_options(kwargs, message) -> None:
     valid.update(kwargs)
 
     with pytest.raises(ValueError, match=message):
-        _download._validate_endpoint_query_options(**valid)
+        fetch_dataset_index(**valid)
 
 
 @pytest.mark.parametrize(
