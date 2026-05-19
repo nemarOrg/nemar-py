@@ -17,6 +17,7 @@ from __future__ import annotations
 import concurrent.futures
 import hashlib
 import json
+import os
 import random
 import re
 import shutil
@@ -64,6 +65,14 @@ RETRY_EXCEPTIONS = (
 
 TransferBackend = Literal["auto", "aria2", "python"]
 
+# Private hook: extra command-line arguments appended to every ``aria2c``
+# invocation. Empty in production. Test fixtures monkey-patch this to inject
+# flags such as ``--check-certificate=false`` when targeting the local HTTPS
+# fixture server (aria2c on macOS uses AppleTLS, which silently ignores
+# ``--ca-certificate`` and rejects the self-signed chain otherwise).
+# Not part of the public API.
+_ARIA2_EXTRA_ARGS: list[str] = []
+
 
 class _RetryableError(Exception):
     """Raised when a request can be retried."""
@@ -102,6 +111,7 @@ def download(
     max_concurrent_downloads: int = 16,
     metadata_timeout: float = 30.0,
     stream_timeout: float = 60.0,
+    aria2_timeout: float | None = None,
     data_url: str = DEFAULT_DATA_URL,
 ) -> None:
     """Download a public NEMAR dataset through ``data.nemar.org``."""
@@ -198,6 +208,7 @@ def download(
         max_retries=max_retries,
         max_concurrent_downloads=max_concurrent_downloads,
         stream_timeout=stream_timeout,
+        aria2_timeout=aria2_timeout,
     )
     tqdm.write(f"Finished downloading {dataset} {selected_tag}.")
 
@@ -560,6 +571,7 @@ def _transfer_files(
     max_retries: int,
     max_concurrent_downloads: int,
     stream_timeout: float,
+    aria2_timeout: float | None = None,
 ) -> None:
     target_dir.mkdir(parents=True, exist_ok=True)
     pending = _files_missing_or_incomplete(
@@ -581,6 +593,7 @@ def _transfer_files(
             verify_size=verify_size,
             max_retries=max_retries,
             max_concurrent_downloads=max_concurrent_downloads,
+            aria2_timeout=aria2_timeout,
         )
     else:
         _transfer_with_python(
@@ -656,6 +669,7 @@ def _transfer_with_aria2(
     verify_size: bool,
     max_retries: int,
     max_concurrent_downloads: int,
+    aria2_timeout: float | None = None,
 ) -> None:
     for file in files:
         (target_dir / file.path).parent.mkdir(parents=True, exist_ok=True)
@@ -686,8 +700,23 @@ def _transfer_with_aria2(
         f"--dir={target_dir}",
         f"--input-file={input_path}",
     ]
+    # ``aria2c`` does not honour ``SSL_CERT_FILE`` the way ``httpx`` /
+    # ``certifi`` do. When callers pre-configure a custom CA bundle through
+    # the environment (e.g. corporate proxies, on-premise mirrors, local
+    # test fixtures using a private CA), forward it explicitly so the
+    # aria2 backend can verify the chain against the same trust store as
+    # the rest of the client. Harmless against the public NEMAR endpoint
+    # which uses a publicly-trusted certificate.
+    ssl_cert_file = os.environ.get("SSL_CERT_FILE")
+    if ssl_cert_file:
+        cmd.append(f"--ca-certificate={ssl_cert_file}")
+    cmd.extend(_ARIA2_EXTRA_ARGS)
     try:
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, timeout=aria2_timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"aria2c timed out after {aria2_timeout} seconds."
+        ) from exc
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(
             "aria2c failed to download the selected NEMAR files."

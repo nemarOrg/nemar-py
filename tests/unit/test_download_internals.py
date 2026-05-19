@@ -1045,8 +1045,9 @@ def test_transfer_with_aria2_builds_input_file(monkeypatch, tmp_path: Path) -> N
     """The aria2 adapter writes relative outputs and checksum directives."""
     seen = {}
 
-    def run(cmd, check):
+    def run(cmd, check, **kwargs):
         seen["cmd"] = cmd
+        seen["kwargs"] = kwargs
         input_arg = next(arg for arg in cmd if arg.startswith("--input-file="))
         input_path = Path(input_arg.split("=", 1)[1])
         seen["input"] = input_path.read_text(encoding="utf-8")
@@ -1081,7 +1082,7 @@ def test_transfer_with_aria2_builds_input_file(monkeypatch, tmp_path: Path) -> N
 def test_transfer_with_aria2_reports_failure(monkeypatch, tmp_path: Path) -> None:
     """aria2 failures are normalized to RuntimeError."""
 
-    def run(cmd, check):
+    def run(cmd, check, **kwargs):
         raise subprocess.CalledProcessError(1, cmd)
 
     monkeypatch.setattr(_download.subprocess, "run", run)
