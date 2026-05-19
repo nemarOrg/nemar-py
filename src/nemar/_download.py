@@ -565,7 +565,6 @@ def _transfer_files(
                 pending,
                 target_dir=target_dir,
                 verify_hash=verify_hash,
-                verify_size=verify_size,
                 max_retries=max_retries,
                 max_concurrent_downloads=max_concurrent_downloads,
                 aria2_timeout=aria2_timeout,
@@ -604,7 +603,6 @@ def _transfer_with_aria2(
     *,
     target_dir: Path,
     verify_hash: bool,
-    verify_size: bool,
     max_retries: int,
     max_concurrent_downloads: int,
     aria2_timeout: float | None = None,
@@ -668,14 +666,9 @@ def _transfer_with_aria2(
         ) from exc
     finally:
         input_path.unlink(missing_ok=True)
-
-    # The outer ``_transfer_files`` already runs ``assert_all_present``
-    # with the caller's full verify policy (size + hash) after this
-    # function returns. A second size-only sweep here would just re-stat
-    # every file twice on the aria2 happy path. ``verify_size`` is kept
-    # in the signature so existing callers and tests do not need to
-    # change their kwargs.
-    _ = verify_size
+    # The outer ``_transfer_files`` runs ``assert_all_present`` with the
+    # caller's full verify policy (size + hash) after this function
+    # returns -- the aria2 path does not need a separate verify sweep.
 
 
 def _aria2_checksum(file: DatasetFile) -> str | None:

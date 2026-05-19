@@ -1021,7 +1021,6 @@ def test_transfer_with_aria2_builds_input_file(monkeypatch, tmp_path: Path) -> N
         ],
         target_dir=tmp_path,
         verify_hash=True,
-        verify_size=False,
         max_retries=2,
         max_concurrent_downloads=4,
     )
@@ -1069,7 +1068,6 @@ def test_transfer_with_aria2_split_caps_total_connections(
         ],
         target_dir=tmp_path,
         verify_hash=False,
-        verify_size=False,
         max_retries=0,
         max_concurrent_downloads=max_concurrent_downloads,
     )
@@ -1095,7 +1093,6 @@ def test_transfer_with_aria2_reports_failure(monkeypatch, tmp_path: Path) -> Non
             [DatasetFile(path="x", url="https://data.nemar.org/x")],
             target_dir=tmp_path,
             verify_hash=False,
-            verify_size=False,
             max_retries=0,
             max_concurrent_downloads=1,
         )
