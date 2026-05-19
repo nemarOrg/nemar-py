@@ -49,6 +49,7 @@ from nemar._selection import SelectionPlan
 from nemar._verification import (
     VerifyPolicy,
     VerifyResult,
+    _describe_failure,
     assert_all_present,
     detect_case_collisions,
     partition_pending,
@@ -589,15 +590,8 @@ def _transfer_files(
     # Final correctness sweep. Runs over the FULL manifest (not just the
     # files we transferred) because the pre-transfer partition trusts
     # size only. This is the real hash gate that catches a
-    # right-size-wrong-content file on disk. Goes through the back-compat
-    # shim so that tests which monkeypatch ``_verify_manifest_files``
-    # still observe the hook.
-    _verify_manifest_files(
-        files,
-        target_dir=target_dir,
-        verify_hash=verify_hash,
-        verify_size=verify_size,
-    )
+    # right-size-wrong-content file on disk.
+    assert_all_present(files, target_dir=target_dir, policy=policy)
 
 
 def _select_transfer_backend(requested: str) -> Literal["aria2", "python"]:
@@ -609,24 +603,6 @@ def _select_transfer_backend(requested: str) -> Literal["aria2", "python"]:
     if requested == "auto":
         tqdm.write("aria2c was not found on PATH; using the Python downloader.")
     return "python"
-
-
-def _local_file_satisfies_manifest(
-    file: DatasetFile,
-    *,
-    target_dir: Path,
-    verify_hash: bool,
-    verify_size: bool,
-) -> bool:
-    """Back-compat shim. Delegates to :func:`nemar._verification.check`."""
-    return (
-        _verify_check(
-            file,
-            target_dir / file.path,
-            VerifyPolicy(verify_size=verify_size, verify_hash=verify_hash),
-        )
-        is VerifyResult.OK
-    )
 
 
 def _transfer_with_aria2(
@@ -699,7 +675,7 @@ def _transfer_with_aria2(
     finally:
         input_path.unlink(missing_ok=True)
 
-    # S8: the outer ``_transfer_files`` already runs ``_verify_manifest_files``
+    # The outer ``_transfer_files`` already runs ``assert_all_present``
     # with the caller's full verify policy (size + hash) after this
     # function returns. A second size-only sweep here would just re-stat
     # every file twice on the aria2 happy path. ``verify_size`` is kept
@@ -821,12 +797,14 @@ def _transfer_one_with_python(
                 force_fresh=force_fresh,
                 client=client,
             )
-            _verify_manifest_file(
-                file,
-                outfile,
-                verify_hash=verify_hash,
-                verify_size=verify_size,
+            verify_policy = VerifyPolicy(
+                verify_size=verify_size, verify_hash=verify_hash
             )
+            verify_result = _verify_check(file, outfile, verify_policy)
+            if verify_result is not VerifyResult.OK:
+                raise RuntimeError(
+                    _describe_failure(file, outfile, verify_result)
+                )
             return
         except policy.retryable_exceptions as exc:
             if attempt == last_attempt:
@@ -930,51 +908,5 @@ def _transfer_one_attempt(
                 current = response.num_bytes_downloaded
                 progress.update(current - previous)
                 previous = current
-
-
-def _verify_manifest_files(
-    files: Sequence[DatasetFile],
-    *,
-    target_dir: Path,
-    verify_hash: bool,
-    verify_size: bool,
-) -> None:
-    """Back-compat shim. Delegates to :func:`assert_all_present`."""
-    assert_all_present(
-        files,
-        target_dir=target_dir,
-        policy=VerifyPolicy(verify_size=verify_size, verify_hash=verify_hash),
-    )
-
-
-def _verify_manifest_file(
-    file: DatasetFile,
-    outfile: Path,
-    *,
-    verify_hash: bool,
-    verify_size: bool,
-) -> None:
-    """Back-compat shim. Verifies one file via :func:`assert_all_present`.
-
-    Existing callers passed ``outfile`` directly rather than reconstructing
-    it from ``target_dir / file.path``; preserve that by reverse-engineering
-    a fake target dir from ``outfile``.
-    """
-    target_dir = outfile.parent
-    # ``assert_all_present`` joins ``target_dir / file.path``. When the
-    # caller already resolved ``outfile`` to an exact path we honour that
-    # by passing a synthetic single-file relative path on a directory that
-    # is the parent of ``outfile`` joined with the original file.path's
-    # parent. The simplest correct shape: stage ``file`` under a
-    # one-file dataset whose path equals ``outfile.name`` rooted at
-    # ``outfile.parent``.
-    from dataclasses import replace as _replace
-
-    fileshim = _replace(file, path=outfile.name)
-    assert_all_present(
-        [fileshim],
-        target_dir=target_dir,
-        policy=VerifyPolicy(verify_size=verify_size, verify_hash=verify_hash),
-    )
 
 

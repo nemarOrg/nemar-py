@@ -840,7 +840,7 @@ def test_transfer_files_dispatches_to_selected_backend(
     )
     monkeypatch.setattr(_download, transfer_name, transfer)
     monkeypatch.setattr(
-        _download, "_verify_manifest_files", lambda *args, **kwargs: None
+        _download, "assert_all_present", lambda *args, **kwargs: None
     )
 
     _download._transfer_files(
@@ -981,18 +981,17 @@ def test_local_file_satisfies_manifest(
     tmp_path: Path, file, content, verify_hash, verify_size, expected
 ) -> None:
     """Local files are reused only when selected manifest checks pass."""
+    from nemar._verification import VerifyPolicy, VerifyResult, check
+
     if content is not None:
         (tmp_path / file.path).write_bytes(content)
 
-    assert (
-        _download._local_file_satisfies_manifest(
-            file,
-            target_dir=tmp_path,
-            verify_hash=verify_hash,
-            verify_size=verify_size,
-        )
-        is expected
+    result = check(
+        file,
+        tmp_path / file.path,
+        VerifyPolicy(verify_size=verify_size, verify_hash=verify_hash),
     )
+    assert (result is VerifyResult.OK) is expected
 
 
 def test_transfer_with_aria2_builds_input_file(monkeypatch, tmp_path: Path) -> None:
@@ -1143,16 +1142,17 @@ def test_verify_manifest_file_errors(
     tmp_path: Path, file, content, verify_hash, verify_size, message
 ) -> None:
     """Verifier reports missing, size, and checksum mismatches."""
+    from nemar._verification import VerifyPolicy, assert_all_present
+
     outfile = tmp_path / file.path
     if content is not None:
         outfile.write_bytes(content)
 
     with pytest.raises(RuntimeError, match=message):
-        _download._verify_manifest_file(
-            file,
-            outfile,
-            verify_hash=verify_hash,
-            verify_size=verify_size,
+        assert_all_present(
+            [file],
+            target_dir=tmp_path,
+            policy=VerifyPolicy(verify_size=verify_size, verify_hash=verify_hash),
         )
 
 
