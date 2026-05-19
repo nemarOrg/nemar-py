@@ -56,12 +56,6 @@ from nemar._verification import (
 )
 from nemar._verification import check as _verify_check
 
-# Module-level aliases kept for the streaming retry loop in
-# ``_transfer_one_attempt`` / ``_transfer_one_with_python``.
-_DEFAULT_POLICY = RetryPolicy.default()
-RETRY_STATUS_CODES: frozenset[int] = _DEFAULT_POLICY.retryable_status
-RETRY_EXCEPTIONS = _DEFAULT_POLICY.retryable_exceptions
-
 TransferBackend = Literal["auto", "aria2", "python"]
 
 # Private hook: extra command-line arguments appended to every ``aria2c``
