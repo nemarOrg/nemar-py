@@ -496,66 +496,6 @@ def test_fetch_dataset_index_validates_options(kwargs, message) -> None:
         fetch_dataset_index(**valid)
 
 
-@pytest.mark.parametrize(
-    ("data_url", "expected"),
-    [
-        pytest.param("https://data.nemar.org", "https://data.nemar.org/", id="bare"),
-        pytest.param(
-            "https://data.nemar.org/",
-            "https://data.nemar.org/",
-            id="already-normalized",
-        ),
-        pytest.param(
-            "https://data.nemar.org///",
-            "https://data.nemar.org/",
-            id="extra-slashes",
-        ),
-    ],
-)
-def test_normalize_data_url(data_url, expected) -> None:
-    """Configured NEMAR origins are normalized to one trailing slash."""
-    assert _download._normalize_data_url(data_url) == expected
-
-
-@pytest.mark.parametrize(
-    ("tag", "expected"),
-    [
-        pytest.param("1.0.0", "v1.0.0", id="numeric-version"),
-        pytest.param("v1.0.0", "v1.0.0", id="prefixed-version"),
-        pytest.param(" latest ", "latest", id="trimmed-alias"),
-    ],
-)
-def test_normalize_version_tag(tag, expected) -> None:
-    """Version tags accept NEMAR endpoint labels and numeric aliases."""
-    assert _download._normalize_version_tag(tag) == expected
-
-
-@pytest.mark.parametrize(
-    "tag",
-    [
-        pytest.param("", id="empty"),
-        pytest.param("   ", id="blank"),
-    ],
-)
-def test_normalize_version_tag_rejects_blank(tag) -> None:
-    """Blank version tags fail before endpoint lookup."""
-    with pytest.raises(ValueError, match="must not be empty"):
-        _download._normalize_version_tag(tag)
-
-
-@pytest.mark.parametrize(
-    ("patterns", "expected"),
-    [
-        pytest.param(None, [], id="none"),
-        pytest.param("sub-001", ["sub-001"], id="single-string"),
-        pytest.param(["sub-001", "*.set"], ["sub-001", "*.set"], id="list"),
-    ],
-)
-def test_normalize_bids_patterns(patterns, expected) -> None:
-    """Include and exclude patterns normalize without splitting strings."""
-    assert _download._normalize_bids_patterns(patterns) == expected
-
-
 def test_fetch_dataset_index_rejects_mismatched_payload() -> None:
     """Dataset index payloads must describe the requested dataset."""
     client = MagicMock()

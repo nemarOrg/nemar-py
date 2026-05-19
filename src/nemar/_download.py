@@ -42,6 +42,7 @@ from nemar._request import (
     DATASET_ID_RE,
     DEFAULT_DATA_URL,
     DownloadRequest,
+    _normalize_version_tag,
 )
 from nemar._retry import RetryPolicy
 from nemar._selection import SelectionPlan
@@ -290,29 +291,6 @@ def list_dataset_versions(
         metadata_timeout=metadata_timeout,
         max_retries=max_retries,
     ).versions
-
-
-def _normalize_data_url(data_url: str) -> str:
-    """Back-compat shim. Delegates to :class:`DataEndpoint`."""
-    return DataEndpoint.from_url(data_url).url
-
-
-def _normalize_version_tag(tag: str) -> str:
-    """Back-compat shim. Delegates to the :mod:`_request` normalizer."""
-    from nemar._request import _normalize_version_tag as _impl
-
-    return _impl(tag)
-
-
-def _normalize_bids_patterns(patterns: Iterable[str] | None) -> list[str]:
-    """Back-compat shim. Delegates to the :mod:`_request` normalizer.
-
-    The historical signature returned a list; new code uses the tuple
-    form from :class:`DownloadRequest`. We re-materialize here.
-    """
-    from nemar._request import _normalize_patterns
-
-    return list(_normalize_patterns(patterns))
 
 
 def _fetch_dataset_index(
