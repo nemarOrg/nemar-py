@@ -729,13 +729,13 @@ def _transfer_with_aria2(
     finally:
         input_path.unlink(missing_ok=True)
 
-    if verify_size:
-        _verify_manifest_files(
-            files,
-            target_dir=target_dir,
-            verify_hash=False,
-            verify_size=True,
-        )
+    # S8: the outer ``_transfer_files`` already runs ``_verify_manifest_files``
+    # with the caller's full verify policy (size + hash) after this
+    # function returns. A second size-only sweep here would just re-stat
+    # every file twice on the aria2 happy path. ``verify_size`` is kept
+    # in the signature so existing callers and tests do not need to
+    # change their kwargs.
+    _ = verify_size
 
 
 def _aria2_checksum(file: DatasetFile) -> str | None:
