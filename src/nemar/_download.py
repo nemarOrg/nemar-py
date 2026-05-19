@@ -181,7 +181,7 @@ def _run(request: DownloadRequest) -> None:
             client,
             dataset=request.dataset,
             data_url=data_url,
-            max_retries=request.retry.max_attempts - 1,
+            policy=request.retry,
             endpoint=endpoint,
         )
         version = index.resolve_version(request.requested_tag)
@@ -190,7 +190,7 @@ def _run(request: DownloadRequest) -> None:
             client,
             index=index,
             data_url=data_url,
-            max_retries=request.retry.max_attempts - 1,
+            policy=request.retry,
             endpoint=endpoint,
         )
         manifest_url = endpoint.url_for(version.manifest_url)
@@ -199,7 +199,7 @@ def _run(request: DownloadRequest) -> None:
             dataset=request.dataset,
             version=version,
             manifest_url=manifest_url,
-            max_retries=request.retry.max_attempts - 1,
+            policy=request.retry,
             endpoint=endpoint,
         )
 
@@ -352,7 +352,8 @@ def _fetch_dataset_index(
     *,
     dataset: str,
     data_url: str,
-    max_retries: int,
+    max_retries: int | None = None,
+    policy: RetryPolicy | None = None,
     endpoint: DataEndpoint | None = None,
 ) -> DatasetIndex:
     index_url = (
@@ -365,6 +366,7 @@ def _fetch_dataset_index(
         url=index_url,
         what=f"retrieving NEMAR index for {dataset}",
         max_retries=max_retries,
+        policy=policy,
         endpoint=endpoint,
     )
     index = parse_dataset_index(payload)
@@ -380,7 +382,8 @@ def _fetch_dataset_metadata(
     *,
     index: DatasetIndex,
     data_url: str,
-    max_retries: int,
+    max_retries: int | None = None,
+    policy: RetryPolicy | None = None,
     endpoint: DataEndpoint | None = None,
 ) -> dict[str, Any] | None:
     if index.metadata_url is None:
@@ -390,6 +393,7 @@ def _fetch_dataset_metadata(
         url=_resolve_data_url(data_url, index.metadata_url),
         what=f"retrieving NEMAR metadata for {index.dataset_id}",
         max_retries=max_retries,
+        policy=policy,
         endpoint=endpoint,
     )
     if not isinstance(payload, dict):
@@ -403,7 +407,8 @@ def _fetch_version_manifest(
     dataset: str,
     version: DatasetVersion,
     manifest_url: str,
-    max_retries: int,
+    max_retries: int | None = None,
+    policy: RetryPolicy | None = None,
     endpoint: DataEndpoint | None = None,
 ) -> Any:
     try:
@@ -412,6 +417,7 @@ def _fetch_version_manifest(
             url=manifest_url,
             what=f"retrieving NEMAR manifest for {dataset} {version.version}",
             max_retries=max_retries,
+            policy=policy,
             endpoint=endpoint,
         )
     except RuntimeError as exc:
@@ -431,10 +437,12 @@ def _fetch_json_with_retries(
     *,
     url: str,
     what: str,
-    max_retries: int,
+    max_retries: int | None = None,
+    policy: RetryPolicy | None = None,
     endpoint: DataEndpoint | None = None,
 ) -> Any:
-    policy = RetryPolicy.default().with_attempts(max_retries)
+    if policy is None:
+        policy = RetryPolicy.default().with_attempts(max_retries or 0)
     last_attempt = policy.max_attempts - 1
     for attempt in range(policy.max_attempts):
         try:
