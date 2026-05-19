@@ -36,6 +36,9 @@ MANIFEST
 pip-log.txt
 pip-delete-this-directory.txt
 
+# Vendored reference projects (not part of nemar-py)
+openneuro-py/
+
 # Unit test / coverage reports
 htmlcov/
 .tox/
@@ -45,6 +48,7 @@ htmlcov/
 .cache
 nosetests.xml
 coverage.xml
+coverage.json
 *.cover
 *.py.cover
 .hypothesis/
@@ -95,10 +99,8 @@ ipython_config.py
 # Pipfile.lock
 
 # UV
-#   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-# uv.lock
+#   This project uses pip directly (see pyproject.toml and .github/workflows).
+uv.lock
 
 # poetry
 #   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
