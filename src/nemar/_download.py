@@ -329,9 +329,10 @@ def _fetch_dataset_metadata(
 ) -> dict[str, Any] | None:
     if index.metadata_url is None:
         return None
+    resolved_endpoint = endpoint or DataEndpoint.from_url(data_url)
     payload = _fetch_json_with_retries(
         client,
-        url=_resolve_data_url(data_url, index.metadata_url),
+        url=resolved_endpoint.url_for(index.metadata_url),
         what=f"retrieving NEMAR metadata for {index.dataset_id}",
         max_retries=max_retries,
         policy=policy,
@@ -429,10 +430,6 @@ def _response_detail(response: httpx.Response) -> str:
         if detail:
             return str(detail)
     return json.dumps(payload)[:300]
-
-
-def _resolve_data_url(data_url: str, value: str) -> str:
-    return DataEndpoint.from_url(data_url).url_for(value)
 
 
 def _select_bids_files(
