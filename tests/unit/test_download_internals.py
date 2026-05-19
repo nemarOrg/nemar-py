@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from unittest import mock
 from unittest.mock import MagicMock
 
 import httpx
@@ -632,13 +633,13 @@ def test_fetch_json_with_retries_recovers_after_retryable_status() -> None:
         ),
     ]
 
-    result = _download._fetch_json_with_retries(
-        client,
-        url="https://example.org",
-        what="testing",
-        max_retries=1,
-        retry_backoff=0,
-    )
+    with mock.patch("nemar._download.time.sleep"):
+        result = _download._fetch_json_with_retries(
+            client,
+            url="https://example.org",
+            what="testing",
+            max_retries=1,
+        )
 
     assert result == {"ok": True}
     assert client.get.call_count == 2
@@ -685,7 +686,6 @@ def test_fetch_json_with_retries_reports_failures(response_or_error, message) ->
             url="https://example.org",
             what="testing",
             max_retries=0,
-            retry_backoff=0,
         )
 
 

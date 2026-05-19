@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import statistics
 
-from nemar._download import _next_backoff
+from nemar._retry import _next_backoff
 
 
 def test_next_backoff_introduces_jitter() -> None:

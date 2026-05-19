@@ -43,7 +43,7 @@ from nemar._request import (
     DEFAULT_DATA_URL,
     DownloadRequest,
 )
-from nemar._retry import RetryPolicy, _next_backoff
+from nemar._retry import RetryPolicy
 from nemar._selection import SelectionPlan
 from nemar._verification import (
     VerifyPolicy,
@@ -432,7 +432,6 @@ def _fetch_json_with_retries(
     url: str,
     what: str,
     max_retries: int,
-    retry_backoff: float = 0.5,
     endpoint: DataEndpoint | None = None,
 ) -> Any:
     policy = RetryPolicy.default().with_attempts(max_retries)
@@ -465,8 +464,7 @@ def _fetch_json_with_retries(
 
         remaining = last_attempt - attempt
         tqdm.write(f"Retrying after failure when {what} ({remaining} retries remain).")
-        time.sleep(_next_backoff(retry_backoff))
-        retry_backoff *= 2
+        time.sleep(policy.next_delay(attempt))
 
     raise RuntimeError(f"Unexpected retry exhaustion when {what}.")
 
@@ -853,9 +851,8 @@ def _transfer_one_with_python(
 
     policy = RetryPolicy.default().with_attempts(max_retries)
     last_attempt = policy.max_attempts - 1
-    backoff = policy.base_backoff
-    # S7: after a 416 on a Range request the partial file is stale --
-    # the server's view of the object has changed. We retry once with
+    # After a 416 on a Range request the partial file is stale -- the
+    # server's view of the object has changed. We retry once with
     # ``force_fresh=True`` so the next attempt sends an unconditional
     # GET against a freshly-unlinked target.
     force_fresh = False
@@ -890,8 +887,7 @@ def _transfer_one_with_python(
                 raise RuntimeError(f"Failed to download {file.path}: {exc}") from exc
             force_fresh = False
 
-        time.sleep(_next_backoff(backoff))
-        backoff *= 2
+        time.sleep(policy.next_delay(attempt))
 
 
 def _transfer_one_attempt(
