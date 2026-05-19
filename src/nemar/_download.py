@@ -32,6 +32,7 @@ import httpx
 from tqdm.auto import tqdm
 
 from nemar import __version__, _bids
+from nemar._endpoint import DataEndpoint
 from nemar._models import (
     DatasetFile,
     DatasetIndex,
@@ -255,8 +256,9 @@ def _validate_download_options(
         raise ValueError("max_retries must be non-negative.")
     if max_concurrent_downloads < 1:
         raise ValueError("max_concurrent_downloads must be at least 1.")
-    if not data_url.startswith("https://"):
-        raise ValueError("data_url must use HTTPS.")
+    # Validates HTTPS and normalizes the trailing slash; we discard the value
+    # here because the caller re-builds the endpoint in ``download``.
+    DataEndpoint.from_url(data_url)
 
 
 def _validate_endpoint_query_options(
@@ -266,12 +268,11 @@ def _validate_endpoint_query_options(
         raise ValueError('dataset must look like "nm000132".')
     if max_retries < 0:
         raise ValueError("max_retries must be non-negative.")
-    if not data_url.startswith("https://"):
-        raise ValueError("data_url must use HTTPS.")
+    DataEndpoint.from_url(data_url)
 
 
 def _normalize_data_url(data_url: str) -> str:
-    return data_url.rstrip("/") + "/"
+    return DataEndpoint.from_url(data_url).url
 
 
 def _normalize_version_tag(tag: str) -> str:
@@ -411,7 +412,7 @@ def _response_detail(response: httpx.Response) -> str:
 
 
 def _resolve_data_url(data_url: str, value: str) -> str:
-    return urljoin(data_url, value)
+    return DataEndpoint.from_url(data_url).url_for(value)
 
 
 def _select_bids_files(
