@@ -104,7 +104,3 @@ class RetryPolicy:
         "total attempts".
         """
         return replace(self, max_attempts=max_retries + 1)
-
-    def with_max_backoff(self, cap: float | None) -> RetryPolicy:
-        """Return a copy with ``max_backoff`` set to ``cap``."""
-        return replace(self, max_backoff=cap)

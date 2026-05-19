@@ -110,16 +110,6 @@ def test_next_delay_lives_in_full_jitter_window() -> None:
         assert statistics.stdev(samples) > 0.0
 
 
-def test_next_delay_respects_max_backoff_cap() -> None:
-    """``max_backoff`` caps even the jittered upper bound."""
-    policy = RetryPolicy.default().with_max_backoff(1.0)
-
-    # Without a cap, attempt=5 would be base*32 + jitter -> well above 1.0.
-    samples = [policy.next_delay(5) for _ in range(100)]
-
-    assert all(v <= 1.0 for v in samples)
-
-
 def test_with_attempts_returns_copy_with_attempt_count() -> None:
     """``with_attempts(n)`` produces a new policy capped at ``n`` attempts."""
     policy = RetryPolicy.default()
