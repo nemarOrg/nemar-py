@@ -39,6 +39,9 @@ pip-delete-this-directory.txt
 # Vendored reference projects (not part of nemar-py)
 openneuro-py/
 
+# Local-only docs (planning notes, specs from agentic sessions)
+docs/superpowers/
+
 # Unit test / coverage reports
 htmlcov/
 .tox/
