@@ -15,7 +15,6 @@ download
 from __future__ import annotations
 
 import concurrent.futures
-import hashlib
 import json
 import os
 import re
@@ -42,6 +41,14 @@ from nemar._models import (
 )
 from nemar._retry import RetryPolicy, _next_backoff
 from nemar._selection import SelectionPlan
+from nemar._verification import (
+    VerifyPolicy,
+    VerifyResult,
+    assert_all_present,
+    file_hash,
+    partition_pending,
+)
+from nemar._verification import check as _verify_check
 
 DEFAULT_DATA_URL = "https://data.nemar.org/"
 DATASET_ID_RE = re.compile(r"^nm\d{6}$")
@@ -525,12 +532,8 @@ def _transfer_files(
     aria2_timeout: float | None = None,
 ) -> None:
     target_dir.mkdir(parents=True, exist_ok=True)
-    pending = _files_missing_or_incomplete(
-        files,
-        target_dir=target_dir,
-        verify_hash=verify_hash,
-        verify_size=verify_size,
-    )
+    policy = VerifyPolicy(verify_size=verify_size, verify_hash=verify_hash)
+    pending = partition_pending(files, target_dir=target_dir, policy=policy)
     if not pending:
         tqdm.write("All selected files already exist locally.")
         return
@@ -557,6 +560,10 @@ def _transfer_files(
             stream_timeout=stream_timeout,
         )
 
+    # Final correctness sweep. Goes through the back-compat shim so that
+    # tests which monkeypatch ``_verify_manifest_files`` still observe the
+    # hook; production callers see the same behaviour as a direct
+    # ``assert_all_present`` call.
     _verify_manifest_files(
         files,
         target_dir=target_dir,
@@ -583,16 +590,12 @@ def _files_missing_or_incomplete(
     verify_hash: bool,
     verify_size: bool,
 ) -> list[DatasetFile]:
-    return [
-        file
-        for file in files
-        if not _local_file_satisfies_manifest(
-            file,
-            target_dir=target_dir,
-            verify_hash=verify_hash,
-            verify_size=verify_size,
-        )
-    ]
+    """Back-compat shim. Delegates to :func:`partition_pending`."""
+    return partition_pending(
+        files,
+        target_dir=target_dir,
+        policy=VerifyPolicy(verify_size=verify_size, verify_hash=verify_hash),
+    )
 
 
 def _local_file_satisfies_manifest(
@@ -602,14 +605,15 @@ def _local_file_satisfies_manifest(
     verify_hash: bool,
     verify_size: bool,
 ) -> bool:
-    outfile = target_dir / file.path
-    if not outfile.exists() or not outfile.is_file():
-        return False
-    if verify_size and file.size is not None and outfile.stat().st_size != file.size:
-        return False
-    if verify_hash and not _local_hash_matches_manifest(file, outfile):
-        return False
-    return True
+    """Back-compat shim. Delegates to :func:`nemar._verification.check`."""
+    return (
+        _verify_check(
+            file,
+            target_dir / file.path,
+            VerifyPolicy(verify_size=verify_size, verify_hash=verify_hash),
+        )
+        is VerifyResult.OK
+    )
 
 
 def _transfer_with_aria2(
@@ -847,13 +851,12 @@ def _verify_manifest_files(
     verify_hash: bool,
     verify_size: bool,
 ) -> None:
-    for file in files:
-        _verify_manifest_file(
-            file,
-            target_dir / file.path,
-            verify_hash=verify_hash,
-            verify_size=verify_size,
-        )
+    """Back-compat shim. Delegates to :func:`assert_all_present`."""
+    assert_all_present(
+        files,
+        target_dir=target_dir,
+        policy=VerifyPolicy(verify_size=verify_size, verify_hash=verify_hash),
+    )
 
 
 def _verify_manifest_file(
@@ -863,28 +866,39 @@ def _verify_manifest_file(
     verify_hash: bool,
     verify_size: bool,
 ) -> None:
-    if not outfile.exists():
-        raise RuntimeError(f"Expected downloaded file is missing: {file.path}")
-    if verify_size and file.size is not None and outfile.stat().st_size != file.size:
-        raise RuntimeError(
-            f"Size mismatch for {file.path}: expected {file.size} bytes, "
-            f"got {outfile.stat().st_size}."
-        )
-    if verify_hash and not _local_hash_matches_manifest(file, outfile):
-        raise RuntimeError(f"Checksum mismatch for {file.path}.")
+    """Back-compat shim. Verifies one file via :func:`assert_all_present`.
+
+    Existing callers passed ``outfile`` directly rather than reconstructing
+    it from ``target_dir / file.path``; preserve that by reverse-engineering
+    a fake target dir from ``outfile``.
+    """
+    target_dir = outfile.parent
+    # ``assert_all_present`` joins ``target_dir / file.path``. When the
+    # caller already resolved ``outfile`` to an exact path we honour that
+    # by passing a synthetic single-file relative path on a directory that
+    # is the parent of ``outfile`` joined with the original file.path's
+    # parent. The simplest correct shape: stage ``file`` under a
+    # one-file dataset whose path equals ``outfile.name`` rooted at
+    # ``outfile.parent``.
+    from dataclasses import replace as _replace
+
+    fileshim = _replace(file, path=outfile.name)
+    assert_all_present(
+        [fileshim],
+        target_dir=target_dir,
+        policy=VerifyPolicy(verify_size=verify_size, verify_hash=verify_hash),
+    )
 
 
 def _local_hash_matches_manifest(file: DatasetFile, outfile: Path) -> bool:
+    """Back-compat shim. Delegates to ``_verification``."""
     if file.sha256 is not None:
-        return _file_hash(outfile, "sha256") == file.sha256
+        return file_hash(outfile, "sha256").lower() == file.sha256.lower()
     if file.md5 is not None:
-        return _file_hash(outfile, "md5") == file.md5
+        return file_hash(outfile, "md5").lower() == file.md5.lower()
     return True
 
 
 def _file_hash(path: Path, algorithm: Literal["sha256", "md5"]) -> str:
-    digest = hashlib.new(algorithm)
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    """Back-compat shim. Delegates to :func:`nemar._verification.file_hash`."""
+    return file_hash(path, algorithm)
