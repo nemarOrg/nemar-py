@@ -267,9 +267,26 @@ def _coerce_size(value: Any) -> int | None:
 
 
 def _coerce_hash(value: Any) -> str | None:
+    """Normalize a manifest hash value to a comparable hex string.
+
+    The NEMAR manifest sometimes inherits hashes from upstream ETag
+    headers, which may carry the ``W/`` weak-ETag marker and outer
+    quotes (e.g. ``W/"abcdef"``). We strip both so the value compares
+    equal to the lowercase hex produced by ``hashlib``. Uppercase hex
+    is left as-is here; the verifier lowercases both sides at compare
+    time.
+    """
     if value in (None, ""):
         return None
     if not isinstance(value, str):
         raise RuntimeError(f"Manifest checksum is not a string: {value!r}")
-    value = value.strip().strip('"')
+    value = value.strip()
+    # ``W/"abc"`` -> strip ``W/`` -> ``"abc"`` -> strip outer quotes -> ``abc``.
+    # We strip ``W/`` both before and after the quote strip so we cover
+    # the ``"W/abc"`` ordering some servers emit.
+    if value.startswith("W/"):
+        value = value[2:]
+    value = value.strip('"')
+    if value.startswith("W/"):
+        value = value[2:]
     return value or None

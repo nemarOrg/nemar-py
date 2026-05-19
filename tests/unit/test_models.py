@@ -270,3 +270,31 @@ def test_parse_version_manifest_rejects_invalid_shapes(payload, message) -> None
     """Manifest parser rejects unsafe, ambiguous, or malformed endpoint payloads."""
     with pytest.raises(RuntimeError, match=message):
         parse_manifest(payload)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        pytest.param('"abc"', "abc", id="strong-etag-quotes"),
+        pytest.param('W/"abc"', "abc", id="weak-etag-prefix"),
+        pytest.param('"W/abc"', "abc", id="quoted-weak-prefix"),
+        pytest.param("W/abc", "abc", id="unquoted-weak-prefix"),
+        pytest.param("  abc  ", "abc", id="whitespace-trimmed"),
+        pytest.param("abc", "abc", id="plain-hex-unchanged"),
+        pytest.param("ABCDEF", "ABCDEF", id="uppercase-preserved-here"),
+    ],
+)
+def test_coerce_hash_strips_etag_weak_prefix(raw, expected) -> None:
+    """ETag-derived hashes drop W/ and surrounding quotes (S2).
+
+    Uppercase hex is left as-is; the verifier compares case-insensitively
+    so callers do not need to worry about which case the manifest used.
+    """
+    payload = [
+        {
+            "path": "participants.tsv",
+            "url": "participants.tsv",
+            "sha256": raw,
+        }
+    ]
+    assert parse_manifest(payload)[0].sha256 == expected
