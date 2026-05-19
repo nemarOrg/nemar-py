@@ -23,6 +23,14 @@ _DEFAULT_RETRYABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
     httpx.ReadError,
     httpx.ConnectError,
     httpx.RemoteProtocolError,
+    # PoolTimeout: under saturated connection pool (max_connections =
+    # 2x concurrency, large datasets) httpx raises this when no slot
+    # frees up in time. Transient -- the next attempt will likely have
+    # room.
+    httpx.PoolTimeout,
+    # WriteError: TCP write failed mid-stream (connection reset by the
+    # peer, broken pipe). Transient on flaky links.
+    httpx.WriteError,
 )
 _DEFAULT_BASE_BACKOFF = 0.5
 # ``max_retries=5`` in the public API means "one initial attempt + five retries",

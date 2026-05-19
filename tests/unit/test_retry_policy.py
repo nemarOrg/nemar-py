@@ -26,7 +26,7 @@ def test_default_policy_carries_expected_status_codes() -> None:
 
 
 def test_default_policy_carries_expected_exception_types() -> None:
-    """The default policy advertises the same httpx exception tuple."""
+    """The default policy advertises the httpx exception tuple."""
     policy = RetryPolicy.default()
 
     assert policy.retryable_exceptions == (
@@ -35,6 +35,8 @@ def test_default_policy_carries_expected_exception_types() -> None:
         httpx.ReadError,
         httpx.ConnectError,
         httpx.RemoteProtocolError,
+        httpx.PoolTimeout,
+        httpx.WriteError,
     )
 
 
