@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -1202,3 +1203,52 @@ def test_verify_manifest_file_errors(
             verify_hash=verify_hash,
             verify_size=verify_size,
         )
+
+
+def _is_case_insensitive_fs(tmp_path: Path) -> bool:
+    probe = tmp_path / "ci_probe"
+    probe.write_text("x")
+    try:
+        upper = tmp_path / "CI_PROBE"
+        return upper.exists() and os.path.samefile(probe, upper)
+    finally:
+        probe.unlink(missing_ok=True)
+
+
+def test_assert_no_case_collisions_passes_when_paths_unique(tmp_path: Path) -> None:
+    """Non-colliding paths are accepted on any filesystem."""
+    files = [
+        DatasetFile(path="a.bin", url="https://data.nemar.org/a.bin"),
+        DatasetFile(path="b.bin", url="https://data.nemar.org/b.bin"),
+    ]
+    _download._assert_no_case_collisions(files, target_dir=tmp_path)
+
+
+def test_assert_no_case_collisions_raises_on_case_insensitive_fs(
+    tmp_path: Path,
+) -> None:
+    """Manifest paths that differ only by case fail before transfer (S4)."""
+    if not _is_case_insensitive_fs(tmp_path):
+        pytest.skip("Filesystem is case-sensitive; collision is impossible here.")
+
+    files = [
+        DatasetFile(path="data/Sample.bin", url="https://data.nemar.org/x"),
+        DatasetFile(path="data/sample.bin", url="https://data.nemar.org/y"),
+    ]
+    with pytest.raises(RuntimeError, match="case-insensitive filesystem"):
+        _download._assert_no_case_collisions(files, target_dir=tmp_path)
+
+
+def test_assert_no_case_collisions_is_noop_on_case_sensitive_fs(
+    tmp_path: Path,
+) -> None:
+    """On case-sensitive filesystems, sibling paths are not flagged."""
+    if _is_case_insensitive_fs(tmp_path):
+        pytest.skip("Filesystem is case-insensitive; collision is the right outcome.")
+
+    files = [
+        DatasetFile(path="data/Sample.bin", url="https://data.nemar.org/x"),
+        DatasetFile(path="data/sample.bin", url="https://data.nemar.org/y"),
+    ]
+    # Should not raise.
+    _download._assert_no_case_collisions(files, target_dir=tmp_path)

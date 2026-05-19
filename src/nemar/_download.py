@@ -45,6 +45,7 @@ from nemar._verification import (
     VerifyPolicy,
     VerifyResult,
     assert_all_present,
+    detect_case_collisions,
     file_hash,
     partition_pending,
 )
@@ -186,6 +187,12 @@ def download(
         tag=selected_tag,
         target_dir=target_path,
     )
+    # S4: refuse to start a download whose manifest entries would silently
+    # overwrite each other on a case-insensitive target filesystem
+    # (HFS+ / APFS in default mode / NTFS). Detected at transfer-prep
+    # time rather than at manifest-parse time because the answer
+    # depends on the target volume, which the parser does not know.
+    _assert_no_case_collisions(selected_files, target_dir=target_path)
 
     tqdm.write(
         "Retrieving "
@@ -517,6 +524,33 @@ def _assert_target_matches_dataset_version(
             "the target directory. Use an empty target directory or request the "
             "same version."
         )
+
+
+def _assert_no_case_collisions(
+    files: Sequence[DatasetFile], *, target_dir: Path
+) -> None:
+    """Refuse to start a download that would silently overwrite itself.
+
+    Two manifest entries that differ only by case (``foo.bin`` and
+    ``Foo.bin``) map to the same on-disk file on case-insensitive
+    volumes (HFS+, APFS default, NTFS). The second download would
+    silently overwrite the first -- data-loss with no warning. We
+    raise here so the failure is visible.
+
+    The probe runs against the actual target volume because APFS can
+    be either case-sensitive or case-insensitive on the same OS.
+    """
+    target_dir.mkdir(parents=True, exist_ok=True)
+    collisions = detect_case_collisions(files, target_dir=target_dir)
+    if not collisions:
+        return
+    examples = "; ".join(f"{a} <-> {b}" for a, b in collisions[:5])
+    raise RuntimeError(
+        "The NEMAR manifest contains paths that collide on a "
+        "case-insensitive filesystem at the target directory. Move the "
+        "download to a case-sensitive volume, or contact the dataset "
+        f"maintainer. Examples: {examples}"
+    )
 
 
 def _transfer_files(
