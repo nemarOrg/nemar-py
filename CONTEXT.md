@@ -29,6 +29,15 @@
 - **Transfer backend**: The concrete download implementation used after file
   selection. `aria2c` is preferred for speed; the built-in Python downloader is
   the fallback.
+- **Verification**: The single predicate "does this local file satisfy its
+  manifest entry?", modeled in `src/nemar/_verification.py` as
+  `check(file, path, policy) -> VerifyResult`. Used as a filter before transfer
+  (skip already-complete files) and as the assertion after transfer
+  (`assert_all_present`). Outcomes are `OK`, `MISSING`, `SIZE_MISMATCH`,
+  `HASH_MISMATCH`, and `ERROR_SENTINEL` (a tiny `{"error": ...}` JSON file
+  the NEMAR endpoint writes when an object is unavailable). The same module
+  exposes `detect_case_collisions`, the pre-transfer guard against
+  case-insensitive filesystem clashes that would silently overwrite data.
 
 ## Architectural Notes
 
