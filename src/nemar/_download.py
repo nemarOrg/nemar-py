@@ -82,7 +82,7 @@ class _RetryFreshError(_RetryableError):
 
     Subclass of :class:`_RetryableError` so existing handlers still treat
     it as retryable; the per-file driver distinguishes it to set
-    ``force_fresh=True`` on the next attempt (S7).
+    ``force_fresh=True`` on the next attempt.
     """
 
 
@@ -222,7 +222,7 @@ def _run(request: DownloadRequest) -> None:
         tag=selected_tag,
         target_dir=request.target_path,
     )
-    # S4: refuse to start a download whose manifest entries would silently
+    # Refuse to start a download whose manifest entries would silently
     # overwrite each other on a case-insensitive target filesystem
     # (HFS+ / APFS in default mode / NTFS). Detected at transfer-prep
     # time rather than at manifest-parse time because the answer
@@ -703,7 +703,7 @@ def _transfer_with_python(
     stream_timeout: float,
 ) -> None:
     total = sum(file.size or 0 for file in files)
-    # Candidate G: one httpx.Client for the whole batch. BIDS datasets
+    # One httpx.Client for the whole batch. BIDS datasets
     # have thousands of small TSV/JSON files; opening a fresh client per
     # file means a TCP+TLS handshake per file. Reusing a single client
     # with a connection pool lets keepalive carry the cost across the
@@ -839,7 +839,7 @@ def _transfer_one_attempt(
         "user-agent": f"nemar-py/{__version__}",
     }
     mode = "wb"
-    # ``force_fresh`` (S7) discards any local partial bytes before sending
+    # ``force_fresh`` discards any local partial bytes before sending
     # an unconditional GET. Used when the previous attempt got a 416 and
     # the local partial cannot represent a valid suffix of the current
     # object.
@@ -861,7 +861,7 @@ def _transfer_one_attempt(
     elif file.size is None and outfile.exists():
         outfile.unlink()
 
-    # Candidate G: prefer the shared client when one was passed in. The
+    # Prefer the shared client when one was passed in. The
     # module-level ``httpx.stream`` fallback exists for callers that
     # still drive this function directly (e.g. legacy tests) so we do
     # not break their patched-stream pattern.
@@ -874,7 +874,7 @@ def _transfer_one_attempt(
             "GET", file.url, headers=request_headers, timeout=stream_timeout
         )
     with stream_cm as response:
-        # S7: a 416 against a Range request means the server's view of
+        # A 416 against a Range request means the server's view of
         # the object has changed (object shorter than ``local_size``, or
         # replaced). The partial cannot be salvaged. Unlink it, refund
         # the pre-credited progress, and ask the outer loop to retry

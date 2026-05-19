@@ -55,7 +55,7 @@ class VerifyPolicy:
     """How a local file is verified against its manifest entry.
 
     ``error_sentinel_max_bytes`` bounds how many bytes the verifier will
-    read off disk when probing for a JSON error payload (S9). Files
+    read off disk when probing for a JSON error payload. Files
     larger than this are never considered sentinels.
     """
 
@@ -77,7 +77,7 @@ def check(file: DatasetFile, path: Path, policy: VerifyPolicy) -> VerifyResult:
 
     local_size = path.stat().st_size
 
-    # S9: a tiny, undeclared-size file that parses as ``{"error": ...}``
+    # A tiny, undeclared-size file that parses as ``{"error": ...}``
     # is the NEMAR endpoint's way of saying "I do not have this object".
     # We only probe when the manifest itself did not declare a size, so
     # legitimate small files (empty sidecars, tiny TSVs) are not
@@ -198,7 +198,7 @@ def _hash_matches(file: DatasetFile, path: Path) -> bool:
     """Return ``True`` when the strongest available manifest hash matches.
 
     Hashes are compared case-insensitively because manifests sometimes
-    advertise uppercase hex (S1). ``DatasetFile.sha256`` / ``.md5`` are
+    advertise uppercase hex. ``DatasetFile.sha256`` / ``.md5`` are
     already normalized by :func:`_models._coerce_hash`, so this guard is
     a belt-and-braces against historical manifests that bypass the
     parser.
