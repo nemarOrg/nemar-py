@@ -18,7 +18,6 @@ import concurrent.futures
 import hashlib
 import json
 import os
-import random
 import re
 import shutil
 import subprocess
@@ -40,28 +39,17 @@ from nemar._models import (
     parse_dataset_index,
     parse_version_manifest,
 )
+from nemar._retry import RetryPolicy, _next_backoff
+from nemar._selection import SelectionPlan
 
 DEFAULT_DATA_URL = "https://data.nemar.org/"
 DATASET_ID_RE = re.compile(r"^nm\d{6}$")
 
-ESSENTIAL_BIDS_FILES = {
-    "dataset_description.json",
-    "participants.tsv",
-    "participants.json",
-    "README",
-    "README.md",
-    "CHANGES",
-    "LICENSE",
-}
-
-RETRY_STATUS_CODES = {408, 429, 500, 502, 503, 504, 522, 524}
-RETRY_EXCEPTIONS = (
-    httpx.ConnectTimeout,
-    httpx.ReadTimeout,
-    httpx.ReadError,
-    httpx.ConnectError,
-    httpx.RemoteProtocolError,
-)
+# Module-level aliases kept for the streaming retry loop in
+# ``_transfer_one_attempt`` / ``_transfer_one_with_python``.
+_DEFAULT_POLICY = RetryPolicy.default()
+RETRY_STATUS_CODES: frozenset[int] = _DEFAULT_POLICY.retryable_status
+RETRY_EXCEPTIONS = _DEFAULT_POLICY.retryable_exceptions
 
 TransferBackend = Literal["auto", "aria2", "python"]
 
@@ -76,14 +64,6 @@ _ARIA2_EXTRA_ARGS: list[str] = []
 
 class _RetryableError(Exception):
     """Raised when a request can be retried."""
-
-
-def _next_backoff(base: float) -> float:
-    """Return ``base`` plus jitter to avoid synchronized retry storms.
-
-    Full-jitter to half: ``base + uniform(0, base/2)``.
-    """
-    return base + random.uniform(0.0, base / 2.0)
 
 
 def download(
@@ -387,10 +367,12 @@ def _fetch_json_with_retries(
     max_retries: int,
     retry_backoff: float = 0.5,
 ) -> Any:
-    for attempt in range(max_retries + 1):
+    policy = RetryPolicy.default().with_attempts(max_retries)
+    last_attempt = policy.max_attempts - 1
+    for attempt in range(policy.max_attempts):
         try:
             response = client.get(url)
-            if response.status_code in RETRY_STATUS_CODES:
+            if policy.should_retry_status(response.status_code):
                 raise _RetryableError(f"HTTP {response.status_code}")
             if response.is_error:
                 detail = _response_detail(response)
@@ -398,16 +380,16 @@ def _fetch_json_with_retries(
                     f"Error when {what}: HTTP {response.status_code} {detail}"
                 )
             return response.json()
-        except RETRY_EXCEPTIONS as exc:
-            if attempt == max_retries:
+        except policy.retryable_exceptions as exc:
+            if attempt == last_attempt:
                 raise RuntimeError(f"Network error when {what}: {exc}") from exc
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"Invalid JSON when {what}: {url}") from exc
         except _RetryableError as exc:
-            if attempt == max_retries:
+            if attempt == last_attempt:
                 raise RuntimeError(f"Retryable error when {what}: {exc}") from exc
 
-        remaining = max_retries - attempt
+        remaining = last_attempt - attempt
         tqdm.write(f"Retrying after failure when {what} ({remaining} retries remain).")
         time.sleep(_next_backoff(retry_backoff))
         retry_backoff *= 2
@@ -802,14 +784,17 @@ def _transfer_one_with_python(
     outfile = target_dir / file.path
     outfile.parent.mkdir(parents=True, exist_ok=True)
 
-    backoff = 0.5
-    for attempt in range(max_retries + 1):
+    policy = RetryPolicy.default().with_attempts(max_retries)
+    last_attempt = policy.max_attempts - 1
+    backoff = policy.base_backoff
+    for attempt in range(policy.max_attempts):
         try:
             _transfer_one_attempt(
                 file,
                 outfile=outfile,
                 progress=progress,
                 stream_timeout=stream_timeout,
+                policy=policy,
             )
             _verify_manifest_file(
                 file,
@@ -818,11 +803,11 @@ def _transfer_one_with_python(
                 verify_size=verify_size,
             )
             return
-        except RETRY_EXCEPTIONS as exc:
-            if attempt == max_retries:
+        except policy.retryable_exceptions as exc:
+            if attempt == last_attempt:
                 raise RuntimeError(f"Failed to download {file.path}: {exc}") from exc
         except _RetryableError as exc:
-            if attempt == max_retries:
+            if attempt == last_attempt:
                 raise RuntimeError(f"Failed to download {file.path}: {exc}") from exc
 
         time.sleep(_next_backoff(backoff))
@@ -835,7 +820,10 @@ def _transfer_one_attempt(
     outfile: Path,
     progress: tqdm,
     stream_timeout: float,
+    policy: RetryPolicy | None = None,
 ) -> None:
+    if policy is None:
+        policy = RetryPolicy.default()
     request_headers = {
         "accept": "*/*",
         "accept-encoding": "",
@@ -855,13 +843,18 @@ def _transfer_one_attempt(
     with httpx.stream(
         "GET", file.url, headers=request_headers, timeout=stream_timeout
     ) as response:
-        if response.status_code in RETRY_STATUS_CODES:
+        if policy.should_retry_status(response.status_code):
             raise _RetryableError(f"HTTP {response.status_code}")
         if response.is_error:
             raise RuntimeError(
                 f"HTTP {response.status_code} while downloading {file.path}"
             )
         if mode == "ab" and response.status_code != 206:
+            # Server returned 200 instead of 206 — it does not honour the Range
+            # request and will send the full file. Back out the progress we
+            # already credited for the local partial bytes so the bar does not
+            # overshoot the true file size.
+            progress.update(-local_size)
             mode = "wb"
             local_size = 0
 
