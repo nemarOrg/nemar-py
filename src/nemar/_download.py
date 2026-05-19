@@ -17,7 +17,6 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -39,6 +38,11 @@ from nemar._models import (
     VersionManifest,
     parse_dataset_index,
 )
+from nemar._request import (
+    DATASET_ID_RE,
+    DEFAULT_DATA_URL,
+    DownloadRequest,
+)
 from nemar._retry import RetryPolicy, _next_backoff
 from nemar._selection import SelectionPlan
 from nemar._verification import (
@@ -49,9 +53,6 @@ from nemar._verification import (
     partition_pending,
 )
 from nemar._verification import check as _verify_check
-
-DEFAULT_DATA_URL = "https://data.nemar.org/"
-DATASET_ID_RE = re.compile(r"^nm\d{6}$")
 
 # Module-level aliases kept for the streaming retry loop in
 # ``_transfer_one_attempt`` / ``_transfer_one_with_python``.
@@ -111,23 +112,20 @@ def download(
     aria2_timeout: float | None = None,
     data_url: str = DEFAULT_DATA_URL,
 ) -> None:
-    """Download a public NEMAR dataset through ``data.nemar.org``."""
-    _validate_download_options(
-        dataset=dataset,
-        downloader=downloader,
-        max_retries=max_retries,
-        max_concurrent_downloads=max_concurrent_downloads,
-        data_url=data_url,
-    )
+    """Download a public NEMAR dataset through ``data.nemar.org``.
 
-    endpoint = DataEndpoint.from_url(data_url)
-    data_url = endpoint.url
-    requested_tag = _normalize_version_tag(tag) if tag is not None else None
-    target_path = Path(dataset if target_dir is None else target_dir).expanduser()
-    target_path = target_path.resolve()
-    include_patterns = _normalize_bids_patterns(include)
-    exclude_patterns = _normalize_bids_patterns(exclude)
-    bids_query = _bids.BidsQuery.from_filters(
+    The explicit kwargs preserve IDE / type-checker introspection. The
+    body delegates to :meth:`DownloadRequest.from_kwargs` for the
+    normalization sweep, then to :func:`_run` for the algorithmic
+    sequence (index → version → metadata → manifest → select →
+    target-check → transfer).
+    """
+    request = DownloadRequest.from_kwargs(
+        dataset=dataset,
+        tag=tag,
+        target_dir=target_dir,
+        include=include,
+        exclude=exclude,
         subject=subject,
         session=session,
         task=task,
@@ -139,10 +137,37 @@ def download(
         scope=scope,
         pipeline=pipeline,
         entity=entity,
+        downloader=downloader,
+        verify_hash=verify_hash,
+        verify_size=verify_size,
+        max_retries=max_retries,
+        max_concurrent_downloads=max_concurrent_downloads,
+        metadata_timeout=metadata_timeout,
+        stream_timeout=stream_timeout,
+        aria2_timeout=aria2_timeout,
+        data_url=data_url,
     )
+    _run(request)
+
+
+def _run(request: DownloadRequest) -> None:
+    """Execute one normalized :class:`DownloadRequest`.
+
+    The six algorithmic steps in order:
+
+    1. Fetch the dataset index.
+    2. Resolve the requested version.
+    3. Fetch the dataset metadata document (if advertised).
+    4. Fetch the version manifest payload.
+    5. Parse the manifest, select files, assert target compatibility,
+       and guard against case-insensitive-filesystem collisions.
+    6. Transfer the selected files.
+    """
+    endpoint = request.endpoint
+    data_url = endpoint.url
 
     tqdm.write(f"This is nemar-py {__version__}.")
-    tqdm.write(f"Preparing to download {dataset} from {data_url}")
+    tqdm.write(f"Preparing to download {request.dataset} from {data_url}")
 
     with httpx.Client(
         follow_redirects=True,
@@ -150,31 +175,31 @@ def download(
             "accept": "application/json",
             "user-agent": f"nemar-py/{__version__}",
         },
-        timeout=metadata_timeout,
+        timeout=request.metadata_timeout,
     ) as client:
         index = _fetch_dataset_index(
             client,
-            dataset=dataset,
+            dataset=request.dataset,
             data_url=data_url,
-            max_retries=max_retries,
+            max_retries=request.retry.max_attempts - 1,
             endpoint=endpoint,
         )
-        version = index.resolve_version(requested_tag)
+        version = index.resolve_version(request.requested_tag)
         selected_tag = version.version
         _fetch_dataset_metadata(
             client,
             index=index,
             data_url=data_url,
-            max_retries=max_retries,
+            max_retries=request.retry.max_attempts - 1,
             endpoint=endpoint,
         )
         manifest_url = endpoint.url_for(version.manifest_url)
         manifest_payload = _fetch_version_manifest(
             client,
-            dataset=dataset,
+            dataset=request.dataset,
             version=version,
             manifest_url=manifest_url,
-            max_retries=max_retries,
+            max_retries=request.retry.max_attempts - 1,
             endpoint=endpoint,
         )
 
@@ -186,39 +211,39 @@ def download(
     files = list(manifest)
     selected_files = _select_bids_files(
         files,
-        query=bids_query,
-        include=include_patterns,
-        exclude=exclude_patterns,
+        query=request.bids_query,
+        include=list(request.include_patterns),
+        exclude=list(request.exclude_patterns),
     )
     _assert_target_matches_dataset_version(
-        dataset=dataset,
+        dataset=request.dataset,
         tag=selected_tag,
-        target_dir=target_path,
+        target_dir=request.target_path,
     )
     # S4: refuse to start a download whose manifest entries would silently
     # overwrite each other on a case-insensitive target filesystem
     # (HFS+ / APFS in default mode / NTFS). Detected at transfer-prep
     # time rather than at manifest-parse time because the answer
     # depends on the target volume, which the parser does not know.
-    _assert_no_case_collisions(selected_files, target_dir=target_path)
+    _assert_no_case_collisions(selected_files, target_dir=request.target_path)
 
     tqdm.write(
         "Retrieving "
         f"{len(selected_files)} of {len(files)} manifest files "
-        f"({max_concurrent_downloads} concurrent downloads)."
+        f"({request.transfer.max_concurrent_downloads} concurrent downloads)."
     )
     _transfer_files(
         selected_files,
-        target_dir=target_path,
-        downloader=str(downloader),
-        verify_hash=verify_hash,
-        verify_size=verify_size,
-        max_retries=max_retries,
-        max_concurrent_downloads=max_concurrent_downloads,
-        stream_timeout=stream_timeout,
-        aria2_timeout=aria2_timeout,
+        target_dir=request.target_path,
+        downloader=request.transfer.backend,
+        verify_hash=request.verify.verify_hash,
+        verify_size=request.verify.verify_size,
+        max_retries=request.retry.max_attempts - 1,
+        max_concurrent_downloads=request.transfer.max_concurrent_downloads,
+        stream_timeout=request.transfer.stream_timeout,
+        aria2_timeout=request.transfer.aria2_timeout,
     )
-    tqdm.write(f"Finished downloading {dataset} {selected_tag}.")
+    tqdm.write(f"Finished downloading {request.dataset} {selected_tag}.")
 
 
 def fetch_dataset_index(
@@ -300,24 +325,26 @@ def _validate_endpoint_query_options(
 
 
 def _normalize_data_url(data_url: str) -> str:
+    """Back-compat shim. Delegates to :class:`DataEndpoint`."""
     return DataEndpoint.from_url(data_url).url
 
 
 def _normalize_version_tag(tag: str) -> str:
-    tag = tag.strip()
-    if not tag:
-        raise ValueError("tag must not be empty.")
-    if tag[0].isdigit():
-        return f"v{tag}"
-    return tag
+    """Back-compat shim. Delegates to the :mod:`_request` normalizer."""
+    from nemar._request import _normalize_version_tag as _impl
+
+    return _impl(tag)
 
 
 def _normalize_bids_patterns(patterns: Iterable[str] | None) -> list[str]:
-    if patterns is None:
-        return []
-    if isinstance(patterns, str):
-        return [patterns]
-    return list(patterns)
+    """Back-compat shim. Delegates to the :mod:`_request` normalizer.
+
+    The historical signature returned a list; new code uses the tuple
+    form from :class:`DownloadRequest`. We re-materialize here.
+    """
+    from nemar._request import _normalize_patterns
+
+    return list(_normalize_patterns(patterns))
 
 
 def _fetch_dataset_index(
