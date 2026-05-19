@@ -5,13 +5,11 @@ import pytest
 from nemar import _bids
 from nemar._models import DatasetFile
 from nemar._selection import SelectionPlan
+from tests.fixtures.factories import make_dataset_file
 
 
 def _files(paths: list[str]) -> list[DatasetFile]:
-    return [
-        DatasetFile(path=path, url=f"https://data.nemar.org/nm000132/v1.0.0/{path}")
-        for path in paths
-    ]
+    return [make_dataset_file(path) for path in paths]
 
 
 def test_build_round_trips_trivial_selection() -> None:

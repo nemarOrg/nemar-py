@@ -14,14 +14,12 @@ import pytest
 from nemar import _bids, _download
 from nemar._download import download
 from nemar._models import DatasetFile
+from tests.fixtures.factories import make_dataset_file
 
 
 def dataset_files(paths: list[str]) -> list[DatasetFile]:
     """Create manifest files with stable data.nemar.org URLs."""
-    return [
-        DatasetFile(path=path, url=f"https://data.nemar.org/nm000132/v1.0.0/{path}")
-        for path in paths
-    ]
+    return [make_dataset_file(path) for path in paths]
 
 
 @pytest.mark.parametrize(

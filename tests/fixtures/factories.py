@@ -9,6 +9,31 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from nemar._models import DatasetFile
+
+
+def make_dataset_file(
+    path: str,
+    *,
+    base_url: str = "https://data.nemar.org/nm000132/v1.0.0",
+    size: int | None = None,
+    sha256: str | None = None,
+    md5: str | None = None,
+) -> DatasetFile:
+    """Build a :class:`DatasetFile` with a stable ``base_url/path`` URL.
+
+    Consolidates the three ad-hoc test factories (``_make_file``,
+    ``_files``, ``dataset_files``) so manifest construction is one shape
+    everywhere.
+    """
+    return DatasetFile(
+        path=path,
+        url=f"{base_url.rstrip('/')}/{path}",
+        size=size,
+        sha256=sha256,
+        md5=md5,
+    )
+
 
 def make_index(
     *,

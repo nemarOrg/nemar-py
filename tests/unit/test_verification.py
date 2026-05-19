@@ -19,22 +19,7 @@ from nemar._verification import (
     file_hash,
     partition_pending,
 )
-
-
-def _make_file(
-    path: str,
-    *,
-    size: int | None = None,
-    sha256: str | None = None,
-    md5: str | None = None,
-) -> DatasetFile:
-    return DatasetFile(
-        path=path,
-        url=f"https://data.nemar.org/nm000132/v1.0.0/{path}",
-        size=size,
-        sha256=sha256,
-        md5=md5,
-    )
+from tests.fixtures.factories import make_dataset_file as _make_file
 
 
 class TestCheck:
