@@ -46,7 +46,6 @@ from nemar._verification import (
     VerifyResult,
     assert_all_present,
     detect_case_collisions,
-    file_hash,
     partition_pending,
 )
 from nemar._verification import check as _verify_check
@@ -626,21 +625,6 @@ def _select_transfer_backend(requested: str) -> Literal["aria2", "python"]:
     return "python"
 
 
-def _files_missing_or_incomplete(
-    files: Sequence[DatasetFile],
-    *,
-    target_dir: Path,
-    verify_hash: bool,
-    verify_size: bool,
-) -> list[DatasetFile]:
-    """Back-compat shim. Delegates to :func:`partition_pending`."""
-    return partition_pending(
-        files,
-        target_dir=target_dir,
-        policy=VerifyPolicy(verify_size=verify_size, verify_hash=verify_hash),
-    )
-
-
 def _local_file_satisfies_manifest(
     file: DatasetFile,
     *,
@@ -1006,15 +990,3 @@ def _verify_manifest_file(
     )
 
 
-def _local_hash_matches_manifest(file: DatasetFile, outfile: Path) -> bool:
-    """Back-compat shim. Delegates to ``_verification``."""
-    if file.sha256 is not None:
-        return file_hash(outfile, "sha256").lower() == file.sha256.lower()
-    if file.md5 is not None:
-        return file_hash(outfile, "md5").lower() == file.md5.lower()
-    return True
-
-
-def _file_hash(path: Path, algorithm: Literal["sha256", "md5"]) -> str:
-    """Back-compat shim. Delegates to :func:`nemar._verification.file_hash`."""
-    return file_hash(path, algorithm)
