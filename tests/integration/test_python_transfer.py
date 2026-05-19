@@ -156,5 +156,6 @@ def test_progress_does_not_overshoot_when_server_ignores_range(
     # The initial positive update (crediting existing partial bytes) must also
     # appear before the correction so we can confirm the full round-trip.
     assert total_updates[0] == partial_size, (
-        f"First update should credit partial bytes ({partial_size}); got: {total_updates}"
+        f"First update should credit partial bytes ({partial_size}); "
+        f"got: {total_updates}"
     )

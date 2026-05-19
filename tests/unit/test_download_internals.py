@@ -1081,6 +1081,56 @@ def test_transfer_with_aria2_builds_input_file(monkeypatch, tmp_path: Path) -> N
     assert "--max-tries=3" in seen["cmd"]
 
 
+@pytest.mark.parametrize(
+    ("max_concurrent_downloads", "expected_split"),
+    [
+        pytest.param(1, 16, id="1-download-max-split"),
+        pytest.param(2, 16, id="2-downloads-split-16"),
+        pytest.param(4, 8, id="4-downloads-split-8"),
+        pytest.param(8, 4, id="8-downloads-split-4"),
+        pytest.param(16, 2, id="16-downloads-split-2"),
+        pytest.param(32, 1, id="32-downloads-split-1"),
+        pytest.param(64, 1, id="64-downloads-clamped-to-1"),
+    ],
+)
+def test_transfer_with_aria2_split_caps_total_connections(
+    monkeypatch, tmp_path: Path, max_concurrent_downloads, expected_split
+) -> None:
+    """aria2 --split is capped so max_concurrent_downloads * split <= 32."""
+    seen: dict[str, object] = {}
+
+    def run(cmd, check, **kwargs):
+        seen["cmd"] = cmd
+        input_arg = next(arg for arg in cmd if arg.startswith("--input-file="))
+        input_path = Path(input_arg.split("=", 1)[1])
+        for line in input_path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("  out="):
+                (tmp_path / line.split("=", 1)[1]).write_text("ok", encoding="utf-8")
+
+    monkeypatch.setattr(_download.subprocess, "run", run)
+
+    _download._transfer_with_aria2(
+        [
+            DatasetFile(
+                path="participants.tsv",
+                url="https://data.nemar.org/participants.tsv",
+            )
+        ],
+        target_dir=tmp_path,
+        verify_hash=False,
+        verify_size=False,
+        max_retries=0,
+        max_concurrent_downloads=max_concurrent_downloads,
+    )
+
+    split_arg = next(
+        (arg for arg in seen["cmd"] if arg.startswith("--split=")), None
+    )
+    assert split_arg == f"--split={expected_split}", (
+        f"Expected --split={expected_split}, got {split_arg}"
+    )
+
+
 def test_transfer_with_aria2_reports_failure(monkeypatch, tmp_path: Path) -> None:
     """aria2 failures are normalized to RuntimeError."""
 
