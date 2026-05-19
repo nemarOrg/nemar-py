@@ -75,6 +75,15 @@ class _RetryableError(Exception):
     """Raised when a request can be retried."""
 
 
+class _RetryFreshError(_RetryableError):
+    """Raised when the retry must abandon any local partial bytes.
+
+    Subclass of :class:`_RetryableError` so existing handlers still treat
+    it as retryable; the per-file driver distinguishes it to set
+    ``force_fresh=True`` on the next attempt (S7).
+    """
+
+
 def download(
     *,
     dataset: str,
@@ -798,6 +807,11 @@ def _transfer_one_with_python(
     policy = RetryPolicy.default().with_attempts(max_retries)
     last_attempt = policy.max_attempts - 1
     backoff = policy.base_backoff
+    # S7: after a 416 on a Range request the partial file is stale --
+    # the server's view of the object has changed. We retry once with
+    # ``force_fresh=True`` so the next attempt sends an unconditional
+    # GET against a freshly-unlinked target.
+    force_fresh = False
     for attempt in range(policy.max_attempts):
         try:
             _transfer_one_attempt(
@@ -806,6 +820,7 @@ def _transfer_one_with_python(
                 progress=progress,
                 stream_timeout=stream_timeout,
                 policy=policy,
+                force_fresh=force_fresh,
             )
             _verify_manifest_file(
                 file,
@@ -817,9 +832,15 @@ def _transfer_one_with_python(
         except policy.retryable_exceptions as exc:
             if attempt == last_attempt:
                 raise RuntimeError(f"Failed to download {file.path}: {exc}") from exc
+            force_fresh = False
+        except _RetryFreshError as exc:
+            if attempt == last_attempt:
+                raise RuntimeError(f"Failed to download {file.path}: {exc}") from exc
+            force_fresh = True
         except _RetryableError as exc:
             if attempt == last_attempt:
                 raise RuntimeError(f"Failed to download {file.path}: {exc}") from exc
+            force_fresh = False
 
         time.sleep(_next_backoff(backoff))
         backoff *= 2
@@ -832,6 +853,7 @@ def _transfer_one_attempt(
     progress: tqdm,
     stream_timeout: float,
     policy: RetryPolicy | None = None,
+    force_fresh: bool = False,
 ) -> None:
     if policy is None:
         policy = RetryPolicy.default()
@@ -841,8 +863,14 @@ def _transfer_one_attempt(
         "user-agent": f"nemar-py/{__version__}",
     }
     mode = "wb"
+    # ``force_fresh`` (S7) discards any local partial bytes before sending
+    # an unconditional GET. Used when the previous attempt got a 416 and
+    # the local partial cannot represent a valid suffix of the current
+    # object.
+    if force_fresh and outfile.exists():
+        outfile.unlink()
     local_size = outfile.stat().st_size if outfile.exists() else 0
-    if file.size is not None and 0 < local_size < file.size:
+    if not force_fresh and file.size is not None and 0 < local_size < file.size:
         request_headers["Range"] = f"bytes={local_size}-"
         mode = "ab"
         progress.update(local_size)
@@ -854,6 +882,18 @@ def _transfer_one_attempt(
     with httpx.stream(
         "GET", file.url, headers=request_headers, timeout=stream_timeout
     ) as response:
+        # S7: a 416 against a Range request means the server's view of
+        # the object has changed (object shorter than ``local_size``, or
+        # replaced). The partial cannot be salvaged. Unlink it, refund
+        # the pre-credited progress, and ask the outer loop to retry
+        # with ``force_fresh=True`` (one-shot, not infinite).
+        if mode == "ab" and response.status_code == 416:
+            progress.update(-local_size)
+            if outfile.exists():
+                outfile.unlink()
+            raise _RetryFreshError(
+                "HTTP 416 -- resetting partial download for a fresh GET"
+            )
         if policy.should_retry_status(response.status_code):
             raise _RetryableError(f"HTTP {response.status_code}")
         if response.is_error:

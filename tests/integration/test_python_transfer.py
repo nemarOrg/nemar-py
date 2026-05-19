@@ -159,3 +159,75 @@ def test_progress_does_not_overshoot_when_server_ignores_range(
         f"First update should credit partial bytes ({partial_size}); "
         f"got: {total_updates}"
     )
+
+
+def test_http_416_on_resume_retries_fresh(tmp_path) -> None:
+    """A 416 against a Range request triggers exactly one fresh retry (S7).
+
+    The first call uses ``Range: bytes={partial}-``; the server replies
+    416 (Range Not Satisfiable) because the object has changed or is
+    shorter. The driver must unlink the stale partial and issue an
+    unconditional GET on the next attempt, succeeding without infinite
+    loops.
+    """
+    from tqdm.auto import tqdm as _tqdm
+
+    data = b"fresh download contents"
+    partial_size = 8
+
+    target = tmp_path / "ds"
+    target.mkdir()
+    out = target / "data" / "sample.bin"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(b"X" * partial_size)  # stale partial
+
+    file = DatasetFile(
+        path="data/sample.bin",
+        url="https://data.nemar.org/nm000132/v1.0.0/data/sample.bin",
+        size=len(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+
+    call_count = {"n": 0, "ranged": 0, "fresh": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        if "Range" in request.headers or "range" in request.headers:
+            call_count["ranged"] += 1
+            return httpx.Response(416, content=b"", request=request)
+        call_count["fresh"] += 1
+        return httpx.Response(200, content=data, request=request)
+
+    transport = httpx.MockTransport(handler)
+    client = httpx.Client(transport=transport)
+
+    original_stream = httpx.stream
+
+    def patched_stream(method: str, url: str, **kwargs):
+        return client.stream(method, url, **kwargs)
+
+    httpx.stream = patched_stream
+    try:
+        with _tqdm(
+            total=len(data), desc="test", unit="B", unit_scale=True
+        ) as progress:
+            _download._transfer_one_with_python(
+                file,
+                target,
+                True,  # verify_hash
+                True,  # verify_size
+                3,  # max_retries
+                progress,
+                60.0,
+            )
+    finally:
+        httpx.stream = original_stream
+        client.close()
+
+    # Round trip: at least one Range attempt that 416'd, then exactly one
+    # fresh attempt. We must not loop on 416 forever.
+    assert call_count["ranged"] >= 1, f"Expected a Range request; got {call_count}"
+    assert call_count["fresh"] == 1, (
+        f"Expected exactly one fresh retry; got {call_count}"
+    )
+    assert out.read_bytes() == data
