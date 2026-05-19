@@ -114,14 +114,17 @@ class NemarFakeEndpoint:
             time.sleep(delay_seconds)
             return Response(body, status=200)
 
-        # Use ORDERED so this takes precedence over the permanent handler
-        # already registered by ``publish`` for the same path.
+        # ONESHOT takes precedence over the permanent handler already
+        # registered by ``publish`` for the same path, and only intercepts
+        # the next matching request.
         self.server.expect_request(
-            path, handler_type=HandlerType.ORDERED
+            path, handler_type=HandlerType.ONESHOT
         ).respond_with_handler(handler)
 
     def serve_with_range(self, path: str) -> None:
         """Serve ``path`` with full byte-range request support (HTTP 206)."""
+        from pytest_httpserver.httpserver import HandlerType
+
         published = next(iter(self._published.values()))
         relpath = path.lstrip("/").split("/", 1)[1]
         body = published.files[relpath]
@@ -145,10 +148,16 @@ class NemarFakeEndpoint:
                 },
             )
 
-        self.server.expect_request(path).respond_with_handler(handler)
+        # ONESHOT so it takes precedence over the permanent file handler
+        # for the next matching request.
+        self.server.expect_request(
+            path, handler_type=HandlerType.ONESHOT
+        ).respond_with_handler(handler)
 
     def drop_after_bytes(self, path: str, *, after: int) -> None:
         """Send only ``after`` bytes then close the connection."""
+        from pytest_httpserver.httpserver import HandlerType
+
         published = next(iter(self._published.values()))
         relpath = path.lstrip("/").split("/", 1)[1]
         body = published.files[relpath]
@@ -161,4 +170,8 @@ class NemarFakeEndpoint:
                 headers={"Content-Length": str(len(body))},
             )
 
-        self.server.expect_request(path).respond_with_handler(handler)
+        # ONESHOT so it takes precedence over the permanent file handler
+        # for the next matching request.
+        self.server.expect_request(
+            path, handler_type=HandlerType.ONESHOT
+        ).respond_with_handler(handler)
