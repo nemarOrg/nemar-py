@@ -70,12 +70,11 @@ class NemarFakeEndpoint:
 
         self.server.expect_request(f"/{dataset}/").respond_with_json(index)
         if index.get("metadata_url") and metadata is not None:
-            self.server.expect_request(
-                "/" + dataset + "/" + index["metadata_url"].lstrip("/")
-            ).respond_with_json(dict(metadata))
+            metadata_path = "/" + index["metadata_url"].lstrip("/")
+            self.server.expect_request(metadata_path).respond_with_json(dict(metadata))
 
         for version in index.get("versions", []):
-            manifest_path = "/" + dataset + "/" + version["manifest_url"].lstrip("/")
+            manifest_path = "/" + version["manifest_url"].lstrip("/")
             self.server.expect_request(manifest_path).respond_with_json(manifest)
 
         for relpath, content in files.items():
@@ -105,6 +104,8 @@ class NemarFakeEndpoint:
     def slow_response(self, path: str, *, delay_seconds: float) -> None:
         import time
 
+        from pytest_httpserver.httpserver import HandlerType
+
         published = next(iter(self._published.values()))
         relpath = path.lstrip("/").split("/", 1)[1]
         body = published.files[relpath]
@@ -113,7 +114,11 @@ class NemarFakeEndpoint:
             time.sleep(delay_seconds)
             return Response(body, status=200)
 
-        self.server.expect_request(path).respond_with_handler(handler)
+        # Use ORDERED so this takes precedence over the permanent handler
+        # already registered by ``publish`` for the same path.
+        self.server.expect_request(
+            path, handler_type=HandlerType.ORDERED
+        ).respond_with_handler(handler)
 
     def serve_with_range(self, path: str) -> None:
         """Serve ``path`` with full byte-range request support (HTTP 206)."""

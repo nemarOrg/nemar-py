@@ -15,17 +15,25 @@ def make_index(
     dataset: str = "nm000132",
     latest: str = "v1.0.0",
     versions: Iterable[Mapping[str, Any]] | None = None,
-    metadata_url: str | None = "metadata.json",
+    metadata_url: str | None = None,
 ) -> dict[str, Any]:
-    """Build a valid DatasetIndex payload."""
+    """Build a valid DatasetIndex payload.
+
+    ``metadata_url`` and ``manifest_url`` are advertised as paths that include
+    the dataset prefix, matching how the production NEMAR endpoint advertises
+    them (i.e., resolved against ``data_url`` -- the server root -- with
+    ``urljoin``).
+    """
+    if metadata_url is None:
+        metadata_url = f"{dataset}/metadata.json"
     if versions is None:
         versions = [
             {
                 "version": "v1.0.0",
                 "doi": "10.82901/nemar." + dataset,
                 "created_at": "2026-01-01T00:00:00Z",
-                "manifest_url": "v1.0.0/manifest.json",
-                "browse_url": "v1.0.0/",
+                "manifest_url": f"{dataset}/v1.0.0/manifest.json",
+                "browse_url": f"{dataset}/v1.0.0/",
             }
         ]
     return {

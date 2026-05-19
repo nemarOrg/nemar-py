@@ -224,6 +224,7 @@ def test_python_downloader_fetches_from_data_endpoint(tmp_path: Path) -> None:
             verify_size=True,
             max_retries=0,
             max_concurrent_downloads=1,
+            stream_timeout=60.0,
         )
     finally:
         httpx.stream = original_stream
@@ -859,6 +860,7 @@ def test_transfer_files_skips_complete_files(tmp_path: Path) -> None:
         verify_size=True,
         max_retries=0,
         max_concurrent_downloads=1,
+        stream_timeout=60.0,
     )
 
 
@@ -895,6 +897,7 @@ def test_transfer_files_dispatches_to_selected_backend(
         verify_size=True,
         max_retries=0,
         max_concurrent_downloads=1,
+        stream_timeout=60.0,
     )
 
     assert called == {"paths": ["participants.tsv"], "target_dir": tmp_path}

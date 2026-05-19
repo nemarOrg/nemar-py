@@ -38,7 +38,7 @@ def test_fetch_dataset_index_against_real_server(nemar_endpoint) -> None:
         dataset="nm000132", data_url=nemar_endpoint.base_url
     )
     assert idx.latest == "v1.0.0"
-    assert idx.versions[0].manifest_url == "v1.0.0/manifest.json"
+    assert idx.versions[0].manifest_url == "nm000132/v1.0.0/manifest.json"
 
 
 def test_fetch_dataset_index_reports_http_404(nemar_endpoint) -> None:
