@@ -17,6 +17,7 @@ from __future__ import annotations
 import concurrent.futures
 import hashlib
 import json
+import random
 import re
 import shutil
 import subprocess
@@ -66,6 +67,14 @@ TransferBackend = Literal["auto", "aria2", "python"]
 
 class _RetryableError(Exception):
     """Raised when a request can be retried."""
+
+
+def _next_backoff(base: float) -> float:
+    """Return ``base`` plus jitter to avoid synchronized retry storms.
+
+    Full-jitter to half: ``base + uniform(0, base/2)``.
+    """
+    return base + random.uniform(0.0, base / 2.0)
 
 
 def download(
@@ -389,7 +398,7 @@ def _fetch_json_with_retries(
 
         remaining = max_retries - attempt
         tqdm.write(f"Retrying after failure when {what} ({remaining} retries remain).")
-        time.sleep(retry_backoff)
+        time.sleep(_next_backoff(retry_backoff))
         retry_backoff *= 2
 
     raise RuntimeError(f"Unexpected retry exhaustion when {what}.")
@@ -784,7 +793,7 @@ def _transfer_one_with_python(
             if attempt == max_retries:
                 raise RuntimeError(f"Failed to download {file.path}: {exc}") from exc
 
-        time.sleep(backoff)
+        time.sleep(_next_backoff(backoff))
         backoff *= 2
 
 
