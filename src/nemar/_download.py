@@ -757,39 +757,68 @@ def _transfer_with_python(
     stream_timeout: float,
 ) -> None:
     total = sum(file.size or 0 for file in files)
-    with tqdm(
-        total=total,
-        desc="Overall",
-        unit="B",
-        unit_scale=True,
-        unit_divisor=1024,
-    ) as progress:
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=max_concurrent_downloads
-        ) as executor:
-            futures = [
-                executor.submit(
-                    _transfer_one_with_python,
-                    file,
-                    target_dir,
-                    verify_hash,
-                    verify_size,
-                    max_retries,
-                    progress,
-                    stream_timeout,
-                )
-                for file in files
-            ]
-            errors: list[BaseException] = []
-            for future in concurrent.futures.as_completed(futures):
-                exc = future.exception()
-                if exc is not None:
-                    errors.append(exc)
-            if errors:
-                head = "; ".join(str(e) for e in errors[:3])
-                raise RuntimeError(
-                    f"{len(errors)} file(s) failed during transfer: {head}"
-                ) from errors[0]
+    # Candidate G: one httpx.Client for the whole batch. BIDS datasets
+    # have thousands of small TSV/JSON files; opening a fresh client per
+    # file means a TCP+TLS handshake per file. Reusing a single client
+    # with a connection pool lets keepalive carry the cost across the
+    # batch. The pool caps mirror the per-server connection budget the
+    # aria2 path already enforces (~2x concurrency cap so retries do
+    # not starve in-flight requests).
+    #
+    # TODO: enterprise users behind custom-CA MITM proxies would benefit
+    # from ``truststore.SSLContext()`` here so the OS trust store is
+    # honoured without an explicit ``SSL_CERT_FILE``. Adding the
+    # truststore dependency complicates the wheel; defer until there is
+    # a concrete user request. The ``verify`` knob below is the hook.
+    limits = httpx.Limits(
+        max_connections=max(1, max_concurrent_downloads * 2),
+        max_keepalive_connections=max(1, max_concurrent_downloads),
+    )
+    with httpx.Client(
+        follow_redirects=False,
+        timeout=stream_timeout,
+        headers={
+            "accept": "*/*",
+            "accept-encoding": "",
+            "user-agent": f"nemar-py/{__version__}",
+        },
+        limits=limits,
+        verify=True,
+    ) as client:
+        with tqdm(
+            total=total,
+            desc="Overall",
+            unit="B",
+            unit_scale=True,
+            unit_divisor=1024,
+        ) as progress:
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=max_concurrent_downloads
+            ) as executor:
+                futures = [
+                    executor.submit(
+                        _transfer_one_with_python,
+                        file,
+                        target_dir,
+                        verify_hash,
+                        verify_size,
+                        max_retries,
+                        progress,
+                        stream_timeout,
+                        client,
+                    )
+                    for file in files
+                ]
+                errors: list[BaseException] = []
+                for future in concurrent.futures.as_completed(futures):
+                    exc = future.exception()
+                    if exc is not None:
+                        errors.append(exc)
+                if errors:
+                    head = "; ".join(str(e) for e in errors[:3])
+                    raise RuntimeError(
+                        f"{len(errors)} file(s) failed during transfer: {head}"
+                    ) from errors[0]
 
 
 def _transfer_one_with_python(
@@ -800,6 +829,7 @@ def _transfer_one_with_python(
     max_retries: int,
     progress: tqdm,
     stream_timeout: float,
+    client: httpx.Client | None = None,
 ) -> None:
     outfile = target_dir / file.path
     outfile.parent.mkdir(parents=True, exist_ok=True)
@@ -821,6 +851,7 @@ def _transfer_one_with_python(
                 stream_timeout=stream_timeout,
                 policy=policy,
                 force_fresh=force_fresh,
+                client=client,
             )
             _verify_manifest_file(
                 file,
@@ -854,6 +885,7 @@ def _transfer_one_attempt(
     stream_timeout: float,
     policy: RetryPolicy | None = None,
     force_fresh: bool = False,
+    client: httpx.Client | None = None,
 ) -> None:
     if policy is None:
         policy = RetryPolicy.default()
@@ -879,9 +911,19 @@ def _transfer_one_attempt(
     elif file.size is None and outfile.exists():
         outfile.unlink()
 
-    with httpx.stream(
-        "GET", file.url, headers=request_headers, timeout=stream_timeout
-    ) as response:
+    # Candidate G: prefer the shared client when one was passed in. The
+    # module-level ``httpx.stream`` fallback exists for callers that
+    # still drive this function directly (e.g. legacy tests) so we do
+    # not break their patched-stream pattern.
+    if client is not None:
+        stream_cm = client.stream(
+            "GET", file.url, headers=request_headers, timeout=stream_timeout
+        )
+    else:
+        stream_cm = httpx.stream(
+            "GET", file.url, headers=request_headers, timeout=stream_timeout
+        )
+    with stream_cm as response:
         # S7: a 416 against a Range request means the server's view of
         # the object has changed (object shorter than ``local_size``, or
         # replaced). The partial cannot be salvaged. Unlink it, refund

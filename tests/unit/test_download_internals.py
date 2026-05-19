@@ -195,8 +195,15 @@ def test_fetch_version_manifest_reports_unpublished_data_endpoint() -> None:
         )
 
 
-def test_python_downloader_fetches_from_data_endpoint(tmp_path: Path) -> None:
-    """The Python adapter downloads, verifies size, and verifies checksum."""
+def test_python_downloader_fetches_from_data_endpoint(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The Python adapter downloads, verifies size, and verifies checksum.
+
+    Patches the ``httpx.Client`` constructor used by ``_transfer_with_python``
+    so the shared-client (G) path goes through a ``MockTransport`` instead
+    of a real network. Existing behaviour: one file in, one file on disk.
+    """
     data = b"hello nemar"
     file = DatasetFile(
         path="dataset_description.json",
@@ -210,13 +217,14 @@ def test_python_downloader_fetches_from_data_endpoint(tmp_path: Path) -> None:
         return httpx.Response(200, content=data, request=request)
 
     transport = httpx.MockTransport(handler)
-    client = httpx.Client(transport=transport)
-    original_stream = httpx.stream
+    original_client = httpx.Client
 
-    def stream(method: str, url: str, **kwargs):
-        return client.stream(method, url, **kwargs)
+    class PatchedClient(httpx.Client):
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = transport
+            super().__init__(*args, **kwargs)
 
-    httpx.stream = stream
+    monkeypatch.setattr(httpx, "Client", PatchedClient)
     try:
         _download._transfer_with_python(
             [file],
@@ -228,8 +236,7 @@ def test_python_downloader_fetches_from_data_endpoint(tmp_path: Path) -> None:
             stream_timeout=60.0,
         )
     finally:
-        httpx.stream = original_stream
-        client.close()
+        monkeypatch.setattr(httpx, "Client", original_client)
 
     assert (tmp_path / "dataset_description.json").read_bytes() == data
 

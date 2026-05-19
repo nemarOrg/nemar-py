@@ -161,6 +161,72 @@ def test_progress_does_not_overshoot_when_server_ignores_range(
     )
 
 
+def test_shared_httpx_client_reused_across_files(
+    monkeypatch, nemar_endpoint, target_dir
+) -> None:
+    """One httpx.Client serves the whole streaming batch (G).
+
+    Counts ``httpx.Client.__init__`` invocations during a batch transfer.
+    There are several clients across the full ``download()`` flow (one
+    for metadata/index, one for the streaming download). The candidate
+    G claim is that the *streaming* phase uses exactly one client even
+    when many files are transferred -- so the increment that happens
+    during the streaming phase should be exactly 1, regardless of file
+    count.
+    """
+    blobs = [make_blob(seed=i, size_bytes=256) for i in range(5)]
+    paths = [f"data/file_{i}.bin" for i in range(5)]
+    index = make_index(dataset="nm000132")
+    manifest = make_manifest_list(
+        [
+            make_manifest_entry(path=path, content=blob.content)
+            for path, blob in zip(paths, blobs, strict=True)
+        ]
+    )
+    nemar_endpoint.publish(
+        "nm000132",
+        index=index,
+        manifest=manifest,
+        files={
+            f"v1.0.0/{path}": blob.content
+            for path, blob in zip(paths, blobs, strict=True)
+        },
+        metadata={"Name": "nm000132"},
+    )
+
+    original_init = httpx.Client.__init__
+    init_calls: list[dict] = []
+
+    def patched_init(self, *args, **kwargs):
+        init_calls.append({"limits": kwargs.get("limits")})
+        return original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.Client, "__init__", patched_init)
+
+    nemar.download(
+        dataset="nm000132",
+        target_dir=target_dir,
+        data_url=nemar_endpoint.base_url,
+        downloader="python",
+        max_concurrent_downloads=2,
+    )
+
+    # The streaming client is identifiable by its ``limits`` kwarg --
+    # the metadata client does not set one.
+    streaming_inits = [c for c in init_calls if c["limits"] is not None]
+    assert len(streaming_inits) == 1, (
+        f"Expected exactly one streaming-client init for 5 files; "
+        f"observed {len(streaming_inits)} (total clients: {len(init_calls)})"
+    )
+
+    # Verify every file landed correctly to make sure the shared client
+    # actually delivered the bytes.
+    for path, blob in zip(paths, blobs, strict=True):
+        out = target_dir / path
+        assert out.exists(), f"missing {path}"
+        assert out.read_bytes() == blob.content, f"corrupt {path}"
+
+
 def test_http_416_on_resume_retries_fresh(tmp_path) -> None:
     """A 416 against a Range request triggers exactly one fresh retry (S7).
 
