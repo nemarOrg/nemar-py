@@ -168,6 +168,37 @@ class TestPartitionPending:
 
         assert [file.path for file in pending] == ["missing.bin", "broken.bin"]
 
+    def test_pre_transfer_trusts_size_and_skips_hash(self, tmp_path: Path) -> None:
+        """A right-size, wrong-content file is partitioned as complete pre-transfer.
+
+        Contract: ``pre_transfer=True`` trusts the local size (and the
+        error-sentinel probe) but does not re-hash already-present files.
+        The post-transfer ``assert_all_present`` is the real gate that
+        catches mismatched content.
+        """
+        data = b"actual content"
+        # Manifest advertises a sha256 that does NOT match the local bytes.
+        wrong_hash = "0" * 64
+        file = _make_file("complete.bin", size=len(data), sha256=wrong_hash)
+        (tmp_path / file.path).write_bytes(data)
+
+        pending = partition_pending(
+            [file],
+            target_dir=tmp_path,
+            policy=VerifyPolicy(),
+            pre_transfer=True,
+        )
+        # Skipped from the pending list: the size matches.
+        assert pending == []
+
+        # The same call WITHOUT ``pre_transfer`` re-hashes and surfaces it.
+        pending_full = partition_pending(
+            [file],
+            target_dir=tmp_path,
+            policy=VerifyPolicy(),
+        )
+        assert pending_full == [file]
+
 
 class TestAssertAllPresent:
     """One assertion per non-OK result variant."""

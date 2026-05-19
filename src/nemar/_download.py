@@ -602,37 +602,44 @@ def _transfer_files(
 ) -> None:
     target_dir.mkdir(parents=True, exist_ok=True)
     policy = VerifyPolicy(verify_size=verify_size, verify_hash=verify_hash)
-    pending = partition_pending(files, target_dir=target_dir, policy=policy)
+    # Trust size pre-transfer; the post-transfer ``assert_all_present`` below
+    # is the real gate that re-checks the hash on every file. Hashing every
+    # already-present file before the network does anything would re-read
+    # the entire dataset off disk on every idempotent re-run.
+    pending = partition_pending(
+        files, target_dir=target_dir, policy=policy, pre_transfer=True
+    )
     if not pending:
         tqdm.write("All selected files already exist locally.")
-        return
-
-    selected_backend = _select_transfer_backend(downloader)
-    if selected_backend == "aria2":
-        _transfer_with_aria2(
-            pending,
-            target_dir=target_dir,
-            verify_hash=verify_hash,
-            verify_size=verify_size,
-            max_retries=max_retries,
-            max_concurrent_downloads=max_concurrent_downloads,
-            aria2_timeout=aria2_timeout,
-        )
     else:
-        _transfer_with_python(
-            pending,
-            target_dir=target_dir,
-            verify_hash=verify_hash,
-            verify_size=verify_size,
-            max_retries=max_retries,
-            max_concurrent_downloads=max_concurrent_downloads,
-            stream_timeout=stream_timeout,
-        )
+        selected_backend = _select_transfer_backend(downloader)
+        if selected_backend == "aria2":
+            _transfer_with_aria2(
+                pending,
+                target_dir=target_dir,
+                verify_hash=verify_hash,
+                verify_size=verify_size,
+                max_retries=max_retries,
+                max_concurrent_downloads=max_concurrent_downloads,
+                aria2_timeout=aria2_timeout,
+            )
+        else:
+            _transfer_with_python(
+                pending,
+                target_dir=target_dir,
+                verify_hash=verify_hash,
+                verify_size=verify_size,
+                max_retries=max_retries,
+                max_concurrent_downloads=max_concurrent_downloads,
+                stream_timeout=stream_timeout,
+            )
 
-    # Final correctness sweep. Goes through the back-compat shim so that
-    # tests which monkeypatch ``_verify_manifest_files`` still observe the
-    # hook; production callers see the same behaviour as a direct
-    # ``assert_all_present`` call.
+    # Final correctness sweep. Runs over the FULL manifest (not just the
+    # files we transferred) because the pre-transfer partition trusts
+    # size only. This is the real hash gate that catches a
+    # right-size-wrong-content file on disk. Goes through the back-compat
+    # shim so that tests which monkeypatch ``_verify_manifest_files``
+    # still observe the hook.
     _verify_manifest_files(
         files,
         target_dir=target_dir,

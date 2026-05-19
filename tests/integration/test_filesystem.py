@@ -52,21 +52,30 @@ def test_existing_wrong_version_blocks_download(nemar_endpoint, target_dir):
         )
 
 
-def test_partial_file_with_wrong_hash_is_retried(nemar_endpoint, target_dir):
+def test_partial_file_with_wrong_hash_raises_post_transfer(nemar_endpoint, target_dir):
+    """Pre-transfer trusts size; post-transfer hash check is the gate.
+
+    A locally-present file with the right size but wrong content is
+    skipped from the pending list (no re-hash of the whole dataset
+    before the network does anything). The post-transfer
+    ``assert_all_present`` catches the bad content and raises. This is
+    the intentional contract -- users with corrupted local files get a
+    clear error instead of an O(dataset) rehash on every idempotent
+    re-run.
+    """
     blob = make_blob(seed=2, size_bytes=256)
     _publish(nemar_endpoint, blob)
     bad = target_dir / "f.bin"
     bad.write_bytes(b"\x00" * 256)  # right size, wrong content
 
-    nemar.download(
-        dataset="nm000132",
-        target_dir=target_dir,
-        data_url=nemar_endpoint.base_url,
-        downloader="python",
-        max_concurrent_downloads=1,
-    )
-
-    assert bad.read_bytes() == blob.content
+    with pytest.raises(RuntimeError, match="Checksum mismatch"):
+        nemar.download(
+            dataset="nm000132",
+            target_dir=target_dir,
+            data_url=nemar_endpoint.base_url,
+            downloader="python",
+            max_concurrent_downloads=1,
+        )
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX-only chmod semantics")

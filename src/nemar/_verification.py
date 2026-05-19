@@ -33,7 +33,7 @@ import json
 import os
 import tempfile
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -103,6 +103,7 @@ def partition_pending(
     *,
     target_dir: Path,
     policy: VerifyPolicy,
+    pre_transfer: bool = False,
 ) -> list[DatasetFile]:
     """Return the subset of ``files`` whose local result is not ``OK``.
 
@@ -110,11 +111,23 @@ def partition_pending(
     fetched. Anything other than :attr:`VerifyResult.OK` (including a
     detected error-sentinel from a previous failed run) is included so
     the transfer backend gets a chance to replace it.
+
+    When ``pre_transfer=True`` the hash check is suppressed and only the
+    size (and error-sentinel) checks decide membership. This is the
+    intentional contract for the *pre-transfer* call site: trusting size
+    on already-present files lets a 100%-complete re-run skip an O(dataset)
+    rehash of every local file before the network does anything. The
+    post-transfer :func:`assert_all_present` re-checks the hash and is the
+    real gate -- a file with the right size but wrong content is caught
+    there, not here.
     """
+    effective_policy = (
+        replace(policy, verify_hash=False) if pre_transfer else policy
+    )
     return [
         file
         for file in files
-        if check(file, target_dir / file.path, policy) is not VerifyResult.OK
+        if check(file, target_dir / file.path, effective_policy) is not VerifyResult.OK
     ]
 
 
