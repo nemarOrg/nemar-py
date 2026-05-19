@@ -37,8 +37,8 @@ from nemar._models import (
     DatasetFile,
     DatasetIndex,
     DatasetVersion,
+    VersionManifest,
     parse_dataset_index,
-    parse_version_manifest,
 )
 from nemar._retry import RetryPolicy, _next_backoff
 from nemar._selection import SelectionPlan
@@ -162,11 +162,12 @@ def download(
             endpoint=endpoint,
         )
 
-    files = parse_version_manifest(
+    manifest = VersionManifest.parse(
         manifest_payload,
         manifest_url=manifest_url,
-        data_url=data_url,
+        endpoint=endpoint,
     )
+    files = list(manifest)
     selected_files = _select_bids_files(
         files,
         query=bids_query,

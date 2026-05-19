@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
@@ -71,38 +71,86 @@ def parse_dataset_index(payload: Any) -> DatasetIndex:
         ) from exc
 
 
+@dataclass(frozen=True)
+class VersionManifest:
+    """A parsed NEMAR version manifest.
+
+    Wraps the inventory of :class:`DatasetFile` entries together with the
+    manifest URL they were resolved against and the :class:`DataEndpoint`
+    whose origin they must respect. Duplicate-path detection and the
+    origin-scoping rule live on the value type itself so the invariants
+    survive past the parser.
+    """
+
+    files: tuple[DatasetFile, ...]
+    manifest_url: str
+    endpoint: DataEndpoint
+
+    @classmethod
+    def parse(
+        cls,
+        payload: Any,
+        *,
+        manifest_url: str,
+        endpoint: DataEndpoint,
+    ) -> VersionManifest:
+        """Parse common manifest shapes into a ``VersionManifest``.
+
+        The public manifest schema is intentionally treated as a small,
+        tolerant seam because NEMAR is still exposing the versioned manifest
+        links. The downloader remains strict about the resolved URL origin
+        (every file's URL must be ``endpoint.assert_within``-valid) and
+        about duplicate paths within a manifest.
+        """
+        entries = list(_iter_manifest_entries(payload))
+        files = tuple(
+            _entry_to_file(entry, manifest_url=manifest_url, endpoint=endpoint)
+            for entry in entries
+        )
+        if not files:
+            raise RuntimeError(
+                "The NEMAR manifest did not contain any downloadable files."
+            )
+
+        seen: set[str] = set()
+        duplicates: set[str] = set()
+        for file in files:
+            if file.path in seen:
+                duplicates.add(file.path)
+            seen.add(file.path)
+        if duplicates:
+            examples = ", ".join(sorted(duplicates)[:5])
+            raise RuntimeError(
+                f"The NEMAR manifest contains duplicate paths: {examples}"
+            )
+
+        return cls(files=files, manifest_url=manifest_url, endpoint=endpoint)
+
+    def __iter__(self) -> Iterator[DatasetFile]:
+        return iter(self.files)
+
+    def __len__(self) -> int:
+        return len(self.files)
+
+
 def parse_version_manifest(
     payload: Any,
     *,
     manifest_url: str,
     data_url: str,
 ) -> list[DatasetFile]:
-    """Parse common manifest shapes into a flat list of dataset files.
+    """Parse a NEMAR manifest payload into a flat list of dataset files.
 
-    The public manifest schema is intentionally treated as a small, tolerant
-    seam because NEMAR is still exposing the versioned manifest links. The
-    downloader remains strict about the resolved URL origin.
+    Preserved as a back-compat shim. New callers should prefer
+    :meth:`VersionManifest.parse` so the parsed inventory keeps its
+    origin and manifest URL identity instead of evaporating into a
+    bare ``list``.
     """
     endpoint = DataEndpoint.from_url(data_url)
-    entries = list(_iter_manifest_entries(payload))
-    files = [
-        _entry_to_file(entry, manifest_url=manifest_url, endpoint=endpoint)
-        for entry in entries
-    ]
-    if not files:
-        raise RuntimeError("The NEMAR manifest did not contain any downloadable files.")
-
-    seen: set[str] = set()
-    duplicates: set[str] = set()
-    for file in files:
-        if file.path in seen:
-            duplicates.add(file.path)
-        seen.add(file.path)
-    if duplicates:
-        examples = ", ".join(sorted(duplicates)[:5])
-        raise RuntimeError(f"The NEMAR manifest contains duplicate paths: {examples}")
-
-    return files
+    manifest = VersionManifest.parse(
+        payload, manifest_url=manifest_url, endpoint=endpoint
+    )
+    return list(manifest.files)
 
 
 def _iter_manifest_entries(payload: Any) -> Iterable[Any]:
