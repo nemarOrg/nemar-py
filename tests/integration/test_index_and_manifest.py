@@ -77,3 +77,49 @@ def test_list_dataset_versions_returns_advertised_versions(nemar_endpoint) -> No
         dataset="nm000132", data_url=nemar_endpoint.base_url
     )
     assert [v.version for v in versions] == ["v1.0.0"]
+
+
+def test_fetch_dataset_index_rejects_off_origin_redirect(nemar_endpoint) -> None:
+    """A 302 to another netloc must not silently bypass the origin scope.
+
+    The configured endpoint is ``https://localhost:<port>/``. The fixture
+    server redirects the first ``/nm000132/`` request to the same server
+    bound by IP literal (``https://127.0.0.1:<port>/...``). TLS validates
+    against both names (see ``generate_local_ca``), so httpx will follow
+    the redirect and a naive client would return the (off-origin) payload.
+    The downloader's origin check must catch the netloc divergence and
+    raise instead.
+    """
+    import json as _json
+
+    parsed_base = nemar_endpoint.base_url.rstrip("/")
+    # Re-target the same fixture server through its IP literal so TLS
+    # handshakes succeed but the final URL's netloc differs from the
+    # configured endpoint's netloc.
+    redirect_target = parsed_base.replace("//localhost:", "//127.0.0.1:")
+    assert redirect_target != parsed_base, (
+        "Fixture base_url is expected to use localhost"
+    )
+
+    def handler(request: Request) -> Response:
+        # Respond once with a redirect, then with the index JSON. The
+        # second response stands in for the off-origin server returning
+        # a valid-looking payload.
+        if request.host.startswith("localhost"):
+            return Response(
+                b"",
+                status=302,
+                headers={"Location": f"{redirect_target}/nm000132/"},
+            )
+        return Response(
+            _json.dumps(make_index(dataset="nm000132")),
+            status=200,
+            content_type="application/json",
+        )
+
+    nemar_endpoint.server.expect_request("/nm000132/").respond_with_handler(handler)
+
+    with pytest.raises(RuntimeError, match="outside the configured NEMAR"):
+        nemar.fetch_dataset_index(
+            dataset="nm000132", data_url=nemar_endpoint.base_url
+        )

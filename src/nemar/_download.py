@@ -104,7 +104,8 @@ def download(
         data_url=data_url,
     )
 
-    data_url = _normalize_data_url(data_url)
+    endpoint = DataEndpoint.from_url(data_url)
+    data_url = endpoint.url
     requested_tag = _normalize_version_tag(tag) if tag is not None else None
     target_path = Path(dataset if target_dir is None else target_dir).expanduser()
     target_path = target_path.resolve()
@@ -140,6 +141,7 @@ def download(
             dataset=dataset,
             data_url=data_url,
             max_retries=max_retries,
+            endpoint=endpoint,
         )
         version = index.resolve_version(requested_tag)
         selected_tag = version.version
@@ -148,14 +150,16 @@ def download(
             index=index,
             data_url=data_url,
             max_retries=max_retries,
+            endpoint=endpoint,
         )
-        manifest_url = _resolve_data_url(data_url, version.manifest_url)
+        manifest_url = endpoint.url_for(version.manifest_url)
         manifest_payload = _fetch_version_manifest(
             client,
             dataset=dataset,
             version=version,
             manifest_url=manifest_url,
             max_retries=max_retries,
+            endpoint=endpoint,
         )
 
     files = parse_version_manifest(
@@ -207,7 +211,7 @@ def fetch_dataset_index(
         data_url=data_url,
         max_retries=max_retries,
     )
-    data_url = _normalize_data_url(data_url)
+    endpoint = DataEndpoint.from_url(data_url)
     with httpx.Client(
         follow_redirects=True,
         headers={
@@ -219,8 +223,9 @@ def fetch_dataset_index(
         return _fetch_dataset_index(
             client,
             dataset=dataset,
-            data_url=data_url,
+            data_url=endpoint.url,
             max_retries=max_retries,
+            endpoint=endpoint,
         )
 
 
@@ -298,12 +303,19 @@ def _fetch_dataset_index(
     dataset: str,
     data_url: str,
     max_retries: int,
+    endpoint: DataEndpoint | None = None,
 ) -> DatasetIndex:
+    index_url = (
+        endpoint.url_for(f"{dataset}/")
+        if endpoint is not None
+        else urljoin(data_url, f"{dataset}/")
+    )
     payload = _fetch_json_with_retries(
         client,
-        url=urljoin(data_url, f"{dataset}/"),
+        url=index_url,
         what=f"retrieving NEMAR index for {dataset}",
         max_retries=max_retries,
+        endpoint=endpoint,
     )
     index = parse_dataset_index(payload)
     if index.dataset_id != dataset:
@@ -319,6 +331,7 @@ def _fetch_dataset_metadata(
     index: DatasetIndex,
     data_url: str,
     max_retries: int,
+    endpoint: DataEndpoint | None = None,
 ) -> dict[str, Any] | None:
     if index.metadata_url is None:
         return None
@@ -327,6 +340,7 @@ def _fetch_dataset_metadata(
         url=_resolve_data_url(data_url, index.metadata_url),
         what=f"retrieving NEMAR metadata for {index.dataset_id}",
         max_retries=max_retries,
+        endpoint=endpoint,
     )
     if not isinstance(payload, dict):
         raise RuntimeError("The NEMAR metadata payload must be a JSON object.")
@@ -340,6 +354,7 @@ def _fetch_version_manifest(
     version: DatasetVersion,
     manifest_url: str,
     max_retries: int,
+    endpoint: DataEndpoint | None = None,
 ) -> Any:
     try:
         return _fetch_json_with_retries(
@@ -347,6 +362,7 @@ def _fetch_version_manifest(
             url=manifest_url,
             what=f"retrieving NEMAR manifest for {dataset} {version.version}",
             max_retries=max_retries,
+            endpoint=endpoint,
         )
     except RuntimeError as exc:
         message = str(exc)
@@ -367,6 +383,7 @@ def _fetch_json_with_retries(
     what: str,
     max_retries: int,
     retry_backoff: float = 0.5,
+    endpoint: DataEndpoint | None = None,
 ) -> Any:
     policy = RetryPolicy.default().with_attempts(max_retries)
     last_attempt = policy.max_attempts - 1
@@ -380,6 +397,12 @@ def _fetch_json_with_retries(
                 raise RuntimeError(
                     f"Error when {what}: HTTP {response.status_code} {detail}"
                 )
+            # Validate the final URL after any redirects against the
+            # configured data endpoint. ``httpx`` with ``follow_redirects=True``
+            # would otherwise let a 302 to another host silently bypass the
+            # ``data.nemar.org``-only scope.
+            if endpoint is not None:
+                endpoint.assert_within(str(response.url))
             return response.json()
         except policy.retryable_exceptions as exc:
             if attempt == last_attempt:
