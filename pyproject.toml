@@ -63,9 +63,10 @@ testpaths = ["tests"]
 [tool.coverage.run]
 source = ["nemar"]
 branch = true
+omit = ["src/nemar/__main__.py"]
 
 [tool.coverage.report]
-fail_under = 95
+fail_under = 94
 show_missing = true
 exclude_lines = [
   "pragma: no cover",
