@@ -145,6 +145,41 @@ def test_raise_if_unmatched_includes_suggests_close_match() -> None:
         plan.raise_if_unmatched_includes(filenames=[f.path for f in files])
 
 
+def test_raise_if_unmatched_includes_no_suggestion_for_unique_pattern() -> None:
+    """A literal pattern with no close match falls back to no-suggestion error."""
+    files = _files(["sub-001/eeg/sub-001_task-MMN_eeg.set"])
+
+    plan = SelectionPlan.build(
+        files,
+        query=_bids.BidsQuery(),
+        include=["totally-unrelated-name"],
+        exclude=[],
+    )
+
+    with pytest.raises(RuntimeError) as info:
+        plan.raise_if_unmatched_includes(filenames=[f.path for f in files])
+
+    assert "Perhaps you mean" not in str(info.value)
+    assert "Could not find path in the NEMAR manifest" in str(info.value)
+
+
+def test_zero_match_query_without_hintable_entities_omits_available() -> None:
+    """When the manifest has no subjects/sessions/tasks, no Available: tail is added."""
+    files = _files(["dataset_description.json", "README.md"])
+
+    with pytest.raises(RuntimeError) as info:
+        SelectionPlan.build(
+            files,
+            query=_bids.BidsQuery.from_filters(subject="001"),
+            include=[],
+            exclude=[],
+        )
+
+    message = str(info.value)
+    assert "No files matched the BIDS query" in message
+    assert "Available:" not in message
+
+
 def test_zero_match_query_lists_available_entities() -> None:
     """When a non-empty query matches nothing, the error echoes the manifest."""
     files = _files(

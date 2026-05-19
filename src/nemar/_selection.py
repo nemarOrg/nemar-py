@@ -172,10 +172,12 @@ def _zero_match_message(
     query: _bids.BidsQuery,
     parsed: list[tuple[str, _bids.BidsPath]],
 ) -> str:
-    """Build the zero-match error message, with an Available: hint when useful."""
+    """Build the zero-match error message, with an Available: hint when useful.
+
+    Only called from :meth:`SelectionPlan.build` after a non-empty query
+    matched zero files, so the query is always non-empty here.
+    """
     base = f"No files matched the BIDS query: {query.describe()}."
-    if query.is_empty():
-        return base
 
     hint_parts: list[str] = []
     for entity_key, label in _HINT_ENTITIES:
