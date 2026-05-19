@@ -797,7 +797,6 @@ def _transfer_with_python(
         timeout=stream_timeout,
         headers={
             "accept": "*/*",
-            "accept-encoding": "",
             "user-agent": f"nemar-py/{__version__}",
         },
         limits=limits,
@@ -907,9 +906,8 @@ def _transfer_one_attempt(
 ) -> None:
     if policy is None:
         policy = RetryPolicy.default()
-    request_headers = {
+    request_headers: dict[str, str] = {
         "accept": "*/*",
-        "accept-encoding": "",
         "user-agent": f"nemar-py/{__version__}",
     }
     mode = "wb"
@@ -922,6 +920,12 @@ def _transfer_one_attempt(
     local_size = outfile.stat().st_size if outfile.exists() else 0
     if not force_fresh and file.size is not None and 0 < local_size < file.size:
         request_headers["Range"] = f"bytes={local_size}-"
+        # Disable compression only on Range requests. Range + gzip is
+        # fragile: the server may stream a compressed full body instead
+        # of the requested byte range, defeating the resume. On a fresh
+        # GET we let httpx send its default ``gzip, deflate`` so small
+        # JSON/TSV BIDS sidecars come back compressed.
+        request_headers["accept-encoding"] = ""
         mode = "ab"
         progress.update(local_size)
     elif file.size is not None and local_size > file.size:
