@@ -88,3 +88,20 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["D"]
+
+[tool.mutmut]
+paths_to_mutate = [
+  "src/nemar/_bids.py",
+  "src/nemar/_glob.py",
+  "src/nemar/_models.py",
+]
+tests_dir = ["tests/unit", "tests/property"]
+pytest_add_cli_args = [
+  "-x",
+  "-q",
+  "--no-cov",
+  "--no-header",
+  "--ignore=tests/unit/test_cli_inproc.py",
+  "--ignore=tests/unit/test_download_internals.py",
+  "--ignore=tests/property/test_retry_jitter.py",
+]
