@@ -2,10 +2,12 @@
 
 import pytest
 
-from nemar._models import parse_dataset_index, parse_version_manifest
+from nemar._endpoint import DataEndpoint
+from nemar._models import VersionManifest, parse_dataset_index
 
 MANIFEST_URL = "https://data.nemar.org/nm000132/v1.0.0/manifest.json"
 DATA_URL = "https://data.nemar.org/"
+ENDPOINT = DataEndpoint.from_url(DATA_URL)
 
 
 def make_dataset_index():
@@ -36,11 +38,12 @@ def make_dataset_index():
 
 def parse_manifest(payload):
     """Parse a manifest payload using the canonical NEMAR endpoint origin."""
-    return parse_version_manifest(
+    manifest = VersionManifest.parse(
         payload,
         manifest_url=MANIFEST_URL,
-        data_url=DATA_URL,
+        endpoint=ENDPOINT,
     )
+    return list(manifest.files)
 
 
 def test_parse_dataset_index() -> None:

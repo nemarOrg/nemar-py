@@ -133,26 +133,6 @@ class VersionManifest:
         return len(self.files)
 
 
-def parse_version_manifest(
-    payload: Any,
-    *,
-    manifest_url: str,
-    data_url: str,
-) -> list[DatasetFile]:
-    """Parse a NEMAR manifest payload into a flat list of dataset files.
-
-    Preserved as a back-compat shim. New callers should prefer
-    :meth:`VersionManifest.parse` so the parsed inventory keeps its
-    origin and manifest URL identity instead of evaporating into a
-    bare ``list``.
-    """
-    endpoint = DataEndpoint.from_url(data_url)
-    manifest = VersionManifest.parse(
-        payload, manifest_url=manifest_url, endpoint=endpoint
-    )
-    return list(manifest.files)
-
-
 def _iter_manifest_entries(payload: Any) -> Iterable[Any]:
     if isinstance(payload, list):
         yield from payload
