@@ -31,7 +31,7 @@ from urllib.parse import urljoin
 import httpx
 from tqdm.auto import tqdm
 
-from nemar import __version__, _bids, _glob
+from nemar import __version__, _bids
 from nemar._models import (
     DatasetFile,
     DatasetIndex,
@@ -421,71 +421,10 @@ def _select_bids_files(
     include: list[str],
     exclude: list[str],
 ) -> list[DatasetFile]:
-    filenames = [file.path for file in files]
-
-    if query.is_empty():
-        selected = {
-            filename for filename in filenames if not _glob.is_dotfile(filename)
-        }
-    else:
-        selected = {
-            file.path
-            for file in files
-            if not _glob.is_dotfile(file.path)
-            and _bids.BidsPath.parse(file.path).matches(query)
-        }
-        if not selected:
-            raise RuntimeError(f"No files matched the BIDS query: {query.describe()}.")
-
-    if include:
-        included_by_pattern = _glob.glob_filter(filenames, include)
-        included_paths = {
-            filename for matches in included_by_pattern.values() for filename in matches
-        }
-        selected &= included_paths
-    else:
-        included_by_pattern = {}
-
-    if exclude:
-        excluded_by_pattern = _glob.glob_filter(filenames, exclude)
-        excluded = {
-            filename for matches in excluded_by_pattern.values() for filename in matches
-        }
-    else:
-        excluded = set()
-
-    essential = ESSENTIAL_BIDS_FILES & set(filenames)
-    selected = (selected - excluded) | essential
-    _raise_for_unmatched_includes(
-        include_matches=included_by_pattern,
-        filenames=filenames,
-    )
-    return [file for file in files if file.path in selected]
-
-
-def _raise_for_unmatched_includes(
-    *,
-    include_matches: dict[str, set[str]],
-    filenames: list[str],
-) -> None:
-    for pattern, matches in include_matches.items():
-        if matches:
-            continue
-        has_glob = any(char in pattern for char in "*?[")
-        candidates = [] if has_glob else _close_matches(pattern, filenames)
-        if candidates:
-            extra = " Perhaps you mean: " + ", ".join(candidates[:5])
-        else:
-            extra = ""
-        raise RuntimeError(
-            f"Could not find path in the NEMAR manifest: {pattern}.{extra}"
-        )
-
-
-def _close_matches(pattern: str, filenames: list[str]) -> list[str]:
-    from difflib import get_close_matches
-
-    return get_close_matches(pattern, filenames)
+    """Thin shim over :class:`SelectionPlan` that preserves the prior interface."""
+    plan = SelectionPlan.build(files, query=query, include=include, exclude=exclude)
+    plan.raise_if_unmatched_includes(filenames=[file.path for file in files])
+    return list(plan.final)
 
 
 def _assert_target_matches_dataset_version(
@@ -670,6 +609,12 @@ def _transfer_with_aria2(
             if checksum is not None:
                 input_file.write(f"  checksum={checksum}\n")
 
+    # aria2c owns its own retry loop. We translate ``max_retries`` into
+    # ``--max-tries`` (one initial attempt plus the requested retries) by
+    # going through ``RetryPolicy`` so the two retry contracts read the same
+    # number. ``--retry-wait`` is the aria2-side fixed wait between retries
+    # (seconds), independent of the Python loop's exponential jittered curve.
+    policy = RetryPolicy.default().with_attempts(max_retries)
     cmd = [
         "aria2c",
         "--continue=true",
@@ -678,11 +623,14 @@ def _transfer_with_aria2(
         "--conditional-get=true",
         "--file-allocation=none",
         "--remote-time=true",
-        f"--max-tries={max_retries + 1}",
+        f"--max-tries={policy.max_attempts}",
         "--retry-wait=2",
         f"--max-concurrent-downloads={max_concurrent_downloads}",
         f"--max-connection-per-server={max_concurrent_downloads}",
-        "--split=16",
+        # Cap split so that max_concurrent_downloads * split <= 32, preventing
+        # connection storms on servers and corporate proxies that enforce low
+        # per-host connection limits (commonly 32-64).
+        f"--split={max(1, min(16, 32 // max_concurrent_downloads))}",
         "--min-split-size=1M",
         f"--dir={target_dir}",
         f"--input-file={input_path}",
