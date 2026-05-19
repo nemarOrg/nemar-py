@@ -549,7 +549,12 @@ def _assert_target_matches_dataset_version(
 
     local_version = dataset_description.get("Version")
     if local_version is None:
-        return
+        raise RuntimeError(
+            'Local "dataset_description.json" matches the requested dataset DOI but '
+            'does not contain a "Version" field. This could lead to overwriting data '
+            "from a different version. Use an empty target directory, or remove the "
+            "existing files if you intend to re-download."
+        )
     if not isinstance(local_version, str):
         raise RuntimeError('Local "Version" must be a string when present.')
     local_tag = _normalize_version_tag(local_version)

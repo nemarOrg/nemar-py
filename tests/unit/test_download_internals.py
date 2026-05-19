@@ -759,10 +759,6 @@ def test_response_detail_formats_endpoint_errors(response, expected) -> None:
     [
         pytest.param(None, id="non-empty-without-description"),
         pytest.param(
-            {"DatasetDOI": "doi:10.82901/nemar.nm000132"},
-            id="matching-dataset-without-version",
-        ),
-        pytest.param(
             {"DatasetDOI": "doi:10.82901/nemar.nm000132", "Version": "1.0.0"},
             id="matching-dataset-and-version",
         ),
@@ -814,6 +810,12 @@ def test_assert_target_matches_dataset_version_allows_resume_states(
             RuntimeError,
             "Version.*string",
             id="non-string-version",
+        ),
+        pytest.param(
+            json.dumps({"DatasetDOI": "10.82901/nemar.nm000132"}),
+            RuntimeError,
+            "does not contain a.*Version.*field",
+            id="missing-version-with-files",
         ),
         pytest.param(
             json.dumps(
