@@ -21,9 +21,11 @@ pytestmark = [pytest.mark.e2e, pytest.mark.integration]
 def test_cli_versions_command_against_local_endpoint(nemar_endpoint, target_dir):
     blob = make_blob(seed=1, size_bytes=32)
     index = make_index(dataset="nm000132")
-    manifest = make_manifest_list([
-        make_manifest_entry(path="dataset_description.json", content=blob.content),
-    ])
+    manifest = make_manifest_list(
+        [
+            make_manifest_entry(path="dataset_description.json", content=blob.content),
+        ]
+    )
     nemar_endpoint.publish(
         "nm000132",
         index=index,
@@ -35,10 +37,14 @@ def test_cli_versions_command_against_local_endpoint(nemar_endpoint, target_dir)
     env = os.environ.copy()
     result = subprocess.run(
         [
-            sys.executable, "-m", "nemar",
+            sys.executable,
+            "-m",
+            "nemar",
             "versions",
-            "--dataset", "nm000132",
-            "--data-url", nemar_endpoint.base_url,
+            "--dataset",
+            "nm000132",
+            "--data-url",
+            nemar_endpoint.base_url,
         ],
         env=env,
         capture_output=True,
@@ -52,9 +58,11 @@ def test_cli_versions_command_against_local_endpoint(nemar_endpoint, target_dir)
 def test_cli_download_writes_file(nemar_endpoint, target_dir):
     blob = make_blob(seed=2, size_bytes=128)
     index = make_index(dataset="nm000132")
-    manifest = make_manifest_list([
-        make_manifest_entry(path="dataset_description.json", content=blob.content),
-    ])
+    manifest = make_manifest_list(
+        [
+            make_manifest_entry(path="dataset_description.json", content=blob.content),
+        ]
+    )
     nemar_endpoint.publish(
         "nm000132",
         index=index,
@@ -66,13 +74,20 @@ def test_cli_download_writes_file(nemar_endpoint, target_dir):
     env = os.environ.copy()
     result = subprocess.run(
         [
-            sys.executable, "-m", "nemar",
+            sys.executable,
+            "-m",
+            "nemar",
             "download",
-            "--dataset", "nm000132",
-            "--target-dir", str(target_dir),
-            "--data-url", nemar_endpoint.base_url,
-            "--downloader", "python",
-            "--max-concurrent-downloads", "1",
+            "--dataset",
+            "nm000132",
+            "--target-dir",
+            str(target_dir),
+            "--data-url",
+            nemar_endpoint.base_url,
+            "--downloader",
+            "python",
+            "--max-concurrent-downloads",
+            "1",
         ],
         env=env,
         capture_output=True,

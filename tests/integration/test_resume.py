@@ -19,9 +19,11 @@ def test_resume_from_partial_file_uses_range_header(nemar_endpoint, target_dir):
     blob = make_blob(seed=11, size_bytes=4096)
     rel = "data/big.bin"
     index = make_index(dataset="nm000132")
-    manifest = make_manifest_list([
-        make_manifest_entry(path=rel, content=blob.content),
-    ])
+    manifest = make_manifest_list(
+        [
+            make_manifest_entry(path=rel, content=blob.content),
+        ]
+    )
     nemar_endpoint.publish(
         "nm000132",
         index=index,

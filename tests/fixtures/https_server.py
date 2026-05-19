@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from pytest_httpserver import HTTPServer
@@ -132,8 +130,9 @@ class NemarFakeEndpoint:
         def handler(request: Request) -> Response:
             range_header = request.headers.get("Range")
             if not range_header:
-                return Response(body, status=200,
-                                headers={"Content-Length": str(len(body))})
+                return Response(
+                    body, status=200, headers={"Content-Length": str(len(body))}
+                )
             assert range_header.startswith("bytes=")
             start_str, _, end_str = range_header.removeprefix("bytes=").partition("-")
             start = int(start_str) if start_str else 0

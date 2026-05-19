@@ -18,9 +18,7 @@ from tests.fixtures.factories import (
 pytestmark = [pytest.mark.e2e, pytest.mark.integration]
 
 
-def test_full_download_writes_all_files_with_correct_hashes(
-    nemar_endpoint, target_dir
-):
+def test_full_download_writes_all_files_with_correct_hashes(nemar_endpoint, target_dir):
     dd_bytes = json.dumps(
         make_dataset_description(dataset="nm000132", version="v1.0.0")
     ).encode("utf-8")

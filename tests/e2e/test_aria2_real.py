@@ -42,9 +42,11 @@ def aria2_skip_cert_check(monkeypatch):
 def test_aria2c_downloads_one_file(nemar_endpoint, target_dir, aria2_skip_cert_check):
     blob = make_blob(seed=10, size_bytes=2048)
     index = make_index(dataset="nm000132")
-    manifest = make_manifest_list([
-        make_manifest_entry(path="data/sample.bin", content=blob.content),
-    ])
+    manifest = make_manifest_list(
+        [
+            make_manifest_entry(path="data/sample.bin", content=blob.content),
+        ]
+    )
     nemar_endpoint.publish(
         "nm000132",
         index=index,
@@ -77,9 +79,11 @@ def test_aria2_timeout_kills_hung_process(
     """
     blob = make_blob(seed=20, size_bytes=128)
     index = make_index(dataset="nm000132")
-    manifest = make_manifest_list([
-        make_manifest_entry(path="data/sample.bin", content=blob.content),
-    ])
+    manifest = make_manifest_list(
+        [
+            make_manifest_entry(path="data/sample.bin", content=blob.content),
+        ]
+    )
     nemar_endpoint.publish(
         "nm000132",
         index=index,

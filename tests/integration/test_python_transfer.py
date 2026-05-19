@@ -17,12 +17,14 @@ pytestmark = pytest.mark.integration
 
 def _publish_one_file(nemar_endpoint, blob, *, path: str = "data/sample.bin"):
     index = make_index(dataset="nm000132")
-    manifest = make_manifest_list([
-        make_manifest_entry(
-            path=path,
-            content=blob.content,
-        )
-    ])
+    manifest = make_manifest_list(
+        [
+            make_manifest_entry(
+                path=path,
+                content=blob.content,
+            )
+        ]
+    )
     nemar_endpoint.publish(
         "nm000132",
         index=index,
@@ -32,9 +34,7 @@ def _publish_one_file(nemar_endpoint, blob, *, path: str = "data/sample.bin"):
     )
 
 
-def test_python_downloader_writes_file_and_verifies_sha256(
-    nemar_endpoint, target_dir
-):
+def test_python_downloader_writes_file_and_verifies_sha256(nemar_endpoint, target_dir):
     blob = make_blob(seed=42, size_bytes=1024)
     _publish_one_file(nemar_endpoint, blob)
 
@@ -62,6 +62,7 @@ def test_stream_timeout_is_configurable(nemar_endpoint, target_dir):
     nemar_endpoint.slow_response("/nm000132/v1.0.0/data/sample.bin", delay_seconds=2.0)
 
     import httpx
+
     with pytest.raises((RuntimeError, httpx.ReadTimeout)):
         nemar.download(
             dataset="nm000132",

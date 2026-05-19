@@ -17,12 +17,14 @@ pytestmark = pytest.mark.integration
 
 def _publish_minimal(nemar_endpoint, dataset: str = "nm000132") -> None:
     index = make_index(dataset=dataset)
-    manifest = make_manifest_list([
-        make_manifest_entry(
-            path="dataset_description.json",
-            content=b'{"Name": "x"}',
-        )
-    ])
+    manifest = make_manifest_list(
+        [
+            make_manifest_entry(
+                path="dataset_description.json",
+                content=b'{"Name": "x"}',
+            )
+        ]
+    )
     nemar_endpoint.publish(
         dataset,
         index=index,
@@ -44,9 +46,7 @@ def test_fetch_dataset_index_against_real_server(nemar_endpoint) -> None:
 def test_fetch_dataset_index_reports_http_404(nemar_endpoint) -> None:
     nemar_endpoint.fail_index_with("nm999999", status=404, body="not found")
     with pytest.raises(RuntimeError, match="HTTP 404"):
-        nemar.fetch_dataset_index(
-            dataset="nm999999", data_url=nemar_endpoint.base_url
-        )
+        nemar.fetch_dataset_index(dataset="nm999999", data_url=nemar_endpoint.base_url)
 
 
 def test_fetch_dataset_index_retries_503(nemar_endpoint) -> None:

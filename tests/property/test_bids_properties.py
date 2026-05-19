@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import string
 
-from hypothesis import HealthCheck, given, settings, strategies as st
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
-from nemar._bids import BidsPath, BidsQuery, DATASET_SCOPES
+from nemar._bids import DATASET_SCOPES, BidsPath, BidsQuery
 
 label_chars = string.ascii_lowercase + string.digits
 labels = st.text(alphabet=label_chars, min_size=1, max_size=8)

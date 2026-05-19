@@ -714,9 +714,7 @@ def _transfer_with_aria2(
     try:
         subprocess.run(cmd, check=True, timeout=aria2_timeout)
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"aria2c timed out after {aria2_timeout} seconds."
-        ) from exc
+        raise RuntimeError(f"aria2c timed out after {aria2_timeout} seconds.") from exc
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(
             "aria2c failed to download the selected NEMAR files."

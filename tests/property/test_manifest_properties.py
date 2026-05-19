@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import string
 
 import pytest
-from hypothesis import given, strategies as st
+from hypothesis import given
+from hypothesis import strategies as st
 
 from nemar._models import parse_version_manifest
 
@@ -27,10 +27,7 @@ relative_paths = st.text(alphabet=path_chars, min_size=1, max_size=60).filter(
 )
 @given(paths=st.lists(relative_paths, min_size=1, max_size=8, unique=True))
 def test_parse_list_manifest_round_trip(paths: list[str]) -> None:
-    payload = [
-        {"path": path, "size": idx}
-        for idx, path in enumerate(paths)
-    ]
+    payload = [{"path": path, "size": idx} for idx, path in enumerate(paths)]
     files = parse_version_manifest(
         payload,
         manifest_url="https://localhost/nm000132/v1/manifest.json",
