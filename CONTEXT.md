@@ -28,7 +28,16 @@
   be selected by pipeline name from `derivatives/<pipeline>/`.
 - **Transfer backend**: The concrete download implementation used after file
   selection. `aria2c` is preferred for speed; the built-in Python downloader is
-  the fallback.
+  the fallback. The backend choice and its runtime knobs (concurrency, stream
+  timeout, aria2 timeout) are bundled in the `TransferOptions` value type
+  (`src/nemar/_request.py`), which travels inside a `DownloadRequest`.
+- **Download request**: A `DownloadRequest` value type
+  (`src/nemar/_request.py`) bundling the normalized dataset identity,
+  `DataEndpoint`, requested tag, target path, BIDS query, include/exclude
+  patterns, and the `TransferOptions` / `RetryPolicy` / `VerifyPolicy`
+  policies. Library and CLI callers construct one via
+  `DownloadRequest.from_kwargs(...)`; the orchestrator's six algorithmic
+  steps (`_run`) execute against it.
 - **Verification**: The single predicate "does this local file satisfy its
   manifest entry?", modeled in `src/nemar/_verification.py` as
   `check(file, path, policy) -> VerifyResult`. Used as a filter before transfer
