@@ -50,7 +50,33 @@ source = "vcs"
 packages = ["src/nemar"]
 
 [tool.pytest.ini_options]
-addopts = ["--tb=short", "-ra", "-vv"]
+addopts = ["--tb=short", "-ra", "-vv", "--strict-markers"]
+markers = [
+  "integration: uses the local HTTPS fixture server",
+  "e2e: end-to-end (subprocess and/or real downloader)",
+  "aria2: requires aria2c on PATH",
+  "live: hits data.nemar.org; gated by NEMAR_LIVE_TEST=1",
+  "slow: takes more than 2 seconds",
+]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["nemar"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+]
+
+[tool.pyright]
+include = ["src/nemar"]
+pythonVersion = "3.10"
+typeCheckingMode = "standard"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "D", "I", "UP"]
