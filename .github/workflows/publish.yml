@@ -1,0 +1,64 @@
+name: Publish to PyPI
+
+# Triggered when a tag matching v* is pushed (e.g. v0.1.0).
+# Uses PyPI Trusted Publisher (OIDC) — no API token required.
+#
+# One-time PyPI setup (do this BEFORE pushing the first tag):
+#   1. https://pypi.org/manage/account/publishing/
+#   2. Add a new "pending publisher" with:
+#        Project name:       nemar-py
+#        Owner:              nemarOrg
+#        Repository name:    nemar-py
+#        Workflow filename:  publish.yml
+#        Environment:        pypi
+#   3. Save. The first tag push will create the PyPI project and upload.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # hatch-vcs needs the full history to derive the version
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install build deps
+        run: pip install build twine
+      - name: Build sdist + wheel
+        run: python -m build
+      - name: twine check
+        run: twine check dist/*
+      - name: Smoke install
+        run: |
+          pip install dist/*.whl
+          python -c "import nemar; print(nemar.__version__)"
+          nemar-py --help
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/nemar-py
+    permissions:
+      id-token: write  # required for OIDC trusted publisher
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

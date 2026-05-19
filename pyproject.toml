@@ -8,10 +8,25 @@ license-files = ["LICENSE"]
 authors = [
   { name = "NEMAR Organization" },
 ]
-keywords = ["neuroscience", "bids", "eeg", "meg", "ieeg"]
+keywords = ["neuroscience", "bids", "eeg", "meg", "ieeg", "nemar", "dataset", "download"]
 classifiers = [
+  "Development Status :: 4 - Beta",
   "Intended Audience :: Science/Research",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: BSD License",
+  "Operating System :: OS Independent",
   "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+  "Topic :: Scientific/Engineering :: Medical Science Apps.",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Typing :: Typed",
 ]
 dependencies = [
   "httpx>=0.25",
@@ -23,7 +38,10 @@ dependencies = [
 dynamic = ["version"]
 
 [project.urls]
-homepage = "https://github.com/nemarOrg/nemar-py"
+Homepage = "https://github.com/nemarOrg/nemar-py"
+Repository = "https://github.com/nemarOrg/nemar-py"
+Issues = "https://github.com/nemarOrg/nemar-py/issues"
+Changelog = "https://github.com/nemarOrg/nemar-py/releases"
 
 [project.scripts]
 nemar-py = "nemar._cli:app"
@@ -48,6 +66,9 @@ source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/nemar"]
+
+[tool.hatch.build.targets.wheel.shared-data]
+"src/nemar/py.typed" = "nemar/py.typed"
 
 [tool.pytest.ini_options]
 addopts = ["--tb=short", "-ra", "-vv", "--strict-markers"]
