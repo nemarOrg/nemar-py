@@ -14,7 +14,7 @@ import pytest
 from nemar import _bids, _download
 from nemar._download import download
 from nemar._models import DatasetFile
-from tests.fixtures.factories import make_dataset_file
+from tests.fixtures.factories import make_dataset_file, make_index
 
 
 def dataset_files(paths: list[str]) -> list[DatasetFile]:
@@ -247,11 +247,10 @@ def test_fetch_dataset_index_uses_advertised_versions(monkeypatch) -> None:
         assert str(request.url) == "https://data.nemar.org/nm000132/"
         return httpx.Response(
             200,
-            json={
-                "dataset_id": "nm000132",
-                "latest": "v1.1.1",
-                "metadata_url": "/nm000132/metadata.json",
-                "versions": [
+            json=make_index(
+                dataset="nm000132",
+                latest="v1.1.1",
+                versions=[
                     {
                         "version": "v1.1.1",
                         "doi": "10.82901/nemar.nm000132.v1.1.1",
@@ -265,7 +264,7 @@ def test_fetch_dataset_index_uses_advertised_versions(monkeypatch) -> None:
                         "manifest_url": "/nm000132/v1.0.0/manifest.json",
                     },
                 ],
-            },
+            ),
             request=request,
         )
 
@@ -291,13 +290,12 @@ def test_public_list_dataset_versions_uses_endpoint_index(monkeypatch) -> None:
 
     def fetch_dataset_index(**kwargs):
         return _download.DatasetIndex.model_validate(
-            {
-                "dataset_id": "nm000132",
-                "latest": "v1.0.0",
-                "versions": [
-                    {"version": "v1.0.0", "manifest_url": "/manifest.json"},
-                ],
-            }
+            make_index(
+                dataset="nm000132",
+                latest="v1.0.0",
+                metadata_url=None,
+                versions=[{"version": "v1.0.0", "manifest_url": "/manifest.json"}],
+            )
         )
 
     monkeypatch.setattr(_download, "fetch_dataset_index", fetch_dataset_index)
@@ -318,17 +316,16 @@ def test_download_uses_data_endpoint_until_manifest(
         if request.url.path == "/nm000132/":
             return httpx.Response(
                 200,
-                json={
-                    "dataset_id": "nm000132",
-                    "latest": "v1.0.0",
-                    "metadata_url": "/nm000132/metadata.json",
-                    "versions": [
+                json=make_index(
+                    dataset="nm000132",
+                    metadata_url="/nm000132/metadata.json",
+                    versions=[
                         {
                             "version": "v1.0.0",
                             "manifest_url": "/nm000132/v1.0.0/manifest.json",
                         }
                     ],
-                },
+                ),
                 request=request,
             )
         if request.url.path == "/nm000132/metadata.json":
@@ -371,17 +368,16 @@ def test_download_orchestrates_manifest_selection_and_transfer(
         if request.url.path == "/nm000132/":
             return httpx.Response(
                 200,
-                json={
-                    "dataset_id": "nm000132",
-                    "latest": "v1.0.0",
-                    "metadata_url": "/nm000132/metadata.json",
-                    "versions": [
+                json=make_index(
+                    dataset="nm000132",
+                    metadata_url="/nm000132/metadata.json",
+                    versions=[
                         {
                             "version": "v1.0.0",
                             "manifest_url": "/nm000132/v1.0.0/manifest.json",
                         }
                     ],
-                },
+                ),
                 request=request,
             )
         if request.url.path == "/nm000132/metadata.json":
@@ -499,11 +495,11 @@ def test_fetch_dataset_index_rejects_mismatched_payload() -> None:
     client = MagicMock()
     client.get.return_value = httpx.Response(
         200,
-        json={
-            "dataset_id": "nm000999",
-            "latest": "v1.0.0",
-            "versions": [{"version": "v1.0.0", "manifest_url": "/manifest.json"}],
-        },
+        json=make_index(
+            dataset="nm000999",
+            metadata_url=None,
+            versions=[{"version": "v1.0.0", "manifest_url": "/manifest.json"}],
+        ),
         request=httpx.Request("GET", "https://data.nemar.org/nm000132/"),
     )
 
@@ -519,17 +515,20 @@ def test_fetch_dataset_index_rejects_mismatched_payload() -> None:
 def test_fetch_dataset_metadata_accepts_missing_url() -> None:
     """Dataset metadata is optional in the endpoint index."""
     index = _download.DatasetIndex.model_validate(
-        {
-            "dataset_id": "nm000132",
-            "latest": "v1.0.0",
-            "versions": [{"version": "v1.0.0", "manifest_url": "/manifest.json"}],
-        }
+        make_index(
+            dataset="nm000132",
+            metadata_url=None,
+            versions=[{"version": "v1.0.0", "manifest_url": "/manifest.json"}],
+        )
     )
+    # The factory always emits a metadata_url; the test specifically needs
+    # it absent so the helper short-circuits.
+    index_no_meta = index.model_copy(update={"metadata_url": None})
 
     assert (
         _download._fetch_dataset_metadata(
             MagicMock(),
-            index=index,
+            index=index_no_meta,
             data_url="https://data.nemar.org/",
             max_retries=0,
         )
@@ -546,12 +545,11 @@ def test_fetch_dataset_metadata_rejects_non_object() -> None:
         request=httpx.Request("GET", "https://data.nemar.org/nm000132/metadata.json"),
     )
     index = _download.DatasetIndex.model_validate(
-        {
-            "dataset_id": "nm000132",
-            "latest": "v1.0.0",
-            "metadata_url": "/nm000132/metadata.json",
-            "versions": [{"version": "v1.0.0", "manifest_url": "/manifest.json"}],
-        }
+        make_index(
+            dataset="nm000132",
+            metadata_url="/nm000132/metadata.json",
+            versions=[{"version": "v1.0.0", "manifest_url": "/manifest.json"}],
+        )
     )
 
     with pytest.raises(RuntimeError, match="metadata payload"):
