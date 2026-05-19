@@ -737,8 +737,16 @@ def _transfer_with_python(
                 )
                 for file in files
             ]
+            errors: list[BaseException] = []
             for future in concurrent.futures.as_completed(futures):
-                future.result()
+                exc = future.exception()
+                if exc is not None:
+                    errors.append(exc)
+            if errors:
+                head = "; ".join(str(e) for e in errors[:3])
+                raise RuntimeError(
+                    f"{len(errors)} file(s) failed during transfer: {head}"
+                ) from errors[0]
 
 
 def _transfer_one_with_python(
