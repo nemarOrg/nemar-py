@@ -277,12 +277,14 @@ def test_http_416_on_resume_retries_fresh(tmp_path) -> None:
         with _tqdm(
             total=len(data), desc="test", unit="B", unit_scale=True
         ) as progress:
+            from nemar._retry import RetryPolicy
+            from nemar._verification import VerifyPolicy
+
             _transfer._transfer_one_with_python(
                 file,
                 target,
-                True,  # verify_hash
-                True,  # verify_size
-                3,  # max_retries
+                RetryPolicy.default().with_attempts(3),
+                VerifyPolicy(verify_size=True, verify_hash=True),
                 progress,
                 60.0,
             )

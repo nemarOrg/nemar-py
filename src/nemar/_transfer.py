@@ -63,6 +63,7 @@ import httpx
 from tqdm.auto import tqdm
 
 from nemar import __version__
+from nemar._endpoint import DataEndpoint
 from nemar._errors import TransferError, VerificationError
 from nemar._models import DatasetFile
 from nemar._request import TransferOptions
@@ -126,7 +127,7 @@ class TransferBackend(Protocol):
     ) -> None:
         """Move ``files`` into ``target_dir``.
 
-        Raises ``RuntimeError`` on any irrecoverable failure. The
+        Raises :class:`TransferError` on any irrecoverable failure. The
         orchestrator does not catch it; it is the user-facing failure
         path.
         """
@@ -304,7 +305,6 @@ class PythonBackend:
         # until there is a concrete user request. The ``verify`` knob
         # below is the hook.
         max_concurrent_downloads = options.max_concurrent_downloads
-        max_retries = retry.max_attempts - 1
         stream_timeout = options.stream_timeout
         limits = httpx.Limits(
             max_connections=max(1, max_concurrent_downloads * 2),
@@ -335,9 +335,8 @@ class PythonBackend:
                             _transfer_one_with_python,
                             file,
                             target_dir,
-                            verify.verify_hash,
-                            verify.verify_size,
-                            max_retries,
+                            retry,
+                            verify,
                             progress,
                             stream_timeout,
                             client,
@@ -359,9 +358,8 @@ class PythonBackend:
 def _transfer_one_with_python(
     file: DatasetFile,
     target_dir: Path,
-    verify_hash: bool,
-    verify_size: bool,
-    max_retries: int,
+    retry: RetryPolicy,
+    verify: VerifyPolicy,
     progress: tqdm,
     stream_timeout: float,
     client: httpx.Client | None = None,
@@ -373,11 +371,14 @@ def _transfer_one_with_python(
     ``ThreadPoolExecutor`` future fails and the error aggregator can
     report it); the shared streaming helper returns the
     :class:`VerifyResult`, so we translate here.
+
+    Both ``retry`` and ``verify`` are full policy objects, threaded
+    through unchanged so that any non-default knob (custom
+    ``base_backoff``, ``retryable_status``, ``error_sentinel_max_bytes``,
+    …) the caller put on the policy is honored end-to-end.
     """
     outfile = target_dir / file.path
     outfile.parent.mkdir(parents=True, exist_ok=True)
-    retry = RetryPolicy.default().with_attempts(max_retries)
-    verify = VerifyPolicy(verify_size=verify_size, verify_hash=verify_hash)
     result = _stream_with_retries(
         file,
         outfile=outfile,
@@ -398,6 +399,7 @@ def download_one(
     client: httpx.Client | None = None,
     retry: RetryPolicy | None = None,
     verify: VerifyPolicy | None = None,
+    endpoint: DataEndpoint | None = None,
     stream_timeout: float = 60.0,
 ) -> VerifyResult:
     """Download one :class:`DatasetFile` to ``target_path``.
@@ -425,6 +427,15 @@ def download_one(
     verify
         Verification policy applied to the file post-transfer. Defaults
         to :class:`VerifyPolicy` (size + hash).
+    endpoint
+        Optional :class:`~nemar._endpoint.DataEndpoint` to enforce
+        origin scoping at the call site. When supplied, ``file.url``
+        must share the endpoint's scheme + netloc; otherwise
+        :class:`~nemar._errors.EndpointError` is raised before any
+        bytes are fetched. Files produced by
+        :meth:`~nemar.VersionManifest.parse` are already origin-scoped;
+        passing ``endpoint`` here is the right move for callers that
+        hand-build a :class:`DatasetFile` from untrusted input.
     stream_timeout
         Per-stream HTTP timeout in seconds. Defaults to 60.
 
@@ -438,34 +449,39 @@ def download_one(
 
     Raises
     ------
-    RuntimeError
+    EndpointError
+        When ``endpoint`` is supplied and ``file.url`` is off-origin.
+    TransferError
         On irrecoverable transport failure (retries exhausted, or a
         non-retryable HTTP error such as 4xx that is not 416).
 
     """
+    if endpoint is not None:
+        endpoint.assert_within(file.url)
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    effective_retry = retry if retry is not None else RetryPolicy.default()
-    effective_verify = verify if verify is not None else VerifyPolicy()
+    if retry is None:
+        retry = RetryPolicy.default()
+    if verify is None:
+        verify = VerifyPolicy()
 
     owns_client = client is None
-    active_client = (
-        client if client is not None else _build_oneshot_client(stream_timeout)
-    )
+    if client is None:
+        client = _build_oneshot_client(stream_timeout)
     progress = tqdm(disable=True, leave=False)
     try:
         return _stream_with_retries(
             file,
             outfile=target_path,
-            client=active_client,
-            retry=effective_retry,
-            verify=effective_verify,
+            client=client,
+            retry=retry,
+            verify=verify,
             stream_timeout=stream_timeout,
             progress=progress,
         )
     finally:
         progress.close()
         if owns_client:
-            active_client.close()
+            client.close()
 
 
 def _build_oneshot_client(stream_timeout: float) -> httpx.Client:
@@ -501,8 +517,8 @@ def _stream_with_retries(
     Mirrors the previous ``_transfer_one_with_python`` loop but threads
     ``RetryPolicy`` / ``VerifyPolicy`` through as values and returns
     the :class:`VerifyResult` instead of raising on verify failure.
-    Irrecoverable transport errors still raise ``RuntimeError`` after
-    retries are exhausted.
+    Irrecoverable transport errors still raise :class:`TransferError`
+    after retries are exhausted.
     """
     last_attempt = retry.max_attempts - 1
     force_fresh = False
@@ -555,7 +571,7 @@ def _transfer_one_attempt(
     fresh-retry signal, and the retryable-status escalation. Raises
     :class:`_RetryFreshError` when the local partial cannot be
     salvaged, :class:`_RetryableError` for transient HTTP statuses,
-    and ``RuntimeError`` for non-retryable HTTP errors.
+    and :class:`TransferError` for non-retryable HTTP errors.
     """
     if policy is None:
         policy = RetryPolicy.default()
@@ -624,9 +640,8 @@ def _transfer_one_attempt(
             # overshoot the true file size.
             progress.update(-local_size)
             mode = "wb"
-            local_size = 0
 
-        with outfile.open(mode + "") as handle:
+        with outfile.open(mode) as handle:
             previous = response.num_bytes_downloaded
             for chunk in response.iter_bytes():
                 handle.write(chunk)

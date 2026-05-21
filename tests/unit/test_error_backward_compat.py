@@ -32,9 +32,10 @@ from nemar._verification import VerifyPolicy, assert_all_present
 
 
 def test_endpoint_off_origin_is_a_runtime_error():
-    """``except RuntimeError`` still catches off-origin URL refusal."""
+    """``except RuntimeError`` still catches off-origin URL refusal, with a
+    useful message — not just a typed-but-blank exception."""
     endpoint = DataEndpoint.from_url("https://data.nemar.org/")
-    with pytest.raises(RuntimeError) as info:
+    with pytest.raises(RuntimeError, match="Refusing to download a file") as info:
         endpoint.assert_within("https://elsewhere.example.com/")
     assert isinstance(info.value, EndpointError)
     assert isinstance(info.value, NemarError)
@@ -43,7 +44,9 @@ def test_endpoint_off_origin_is_a_runtime_error():
 def test_manifest_shape_error_is_a_runtime_error():
     """``except RuntimeError`` still catches malformed manifests."""
     endpoint = DataEndpoint.from_url("https://data.nemar.org/")
-    with pytest.raises(RuntimeError) as info:
+    with pytest.raises(
+        RuntimeError, match="must be a JSON object or array"
+    ) as info:
         VersionManifest.parse(
             12345,  # not a list or dict
             manifest_url="https://data.nemar.org/nm000132/v1/manifest.json",
@@ -54,7 +57,9 @@ def test_manifest_shape_error_is_a_runtime_error():
 
 def test_dataset_index_validation_failure_is_a_runtime_error():
     """parse_dataset_index raises a RuntimeError (subclass) on bad payload."""
-    with pytest.raises(RuntimeError) as info:
+    with pytest.raises(
+        RuntimeError, match="unexpected dataset index payload"
+    ) as info:
         parse_dataset_index({"not": "a valid dataset index"})
     assert isinstance(info.value, DatasetIndexError)
 
@@ -73,7 +78,7 @@ def test_dataset_index_resolve_version_runtime_error():
             ],
         }
     )
-    with pytest.raises(RuntimeError) as info:
+    with pytest.raises(RuntimeError, match="does not exist") as info:
         index.resolve_version("v9.9.9")
     assert isinstance(info.value, DatasetIndexError)
 
@@ -89,7 +94,9 @@ def test_selection_zero_match_is_a_runtime_error():
             url="https://data.nemar.org/a",
         )
     ]
-    with pytest.raises(RuntimeError) as info:
+    with pytest.raises(
+        RuntimeError, match="No files matched the BIDS query"
+    ) as info:
         SelectionPlan.build(
             files,
             query=BidsQuery.from_filters(subject="002"),
@@ -102,7 +109,8 @@ def test_selection_zero_match_is_a_runtime_error():
 def test_local_version_mismatch_is_a_file_exists_error(tmp_path: Path):
     """LocalDataset.assert_compatible_with raises FileExistsError on version drift.
 
-    Legacy callers MUST be able to catch FileExistsError, not just NemarError.
+    Legacy callers MUST be able to catch FileExistsError, not just NemarError —
+    and the message MUST name both versions so a user can act on it.
     """
     dataset_description = tmp_path / "dataset_description.json"
     dataset_description.write_text(
@@ -111,7 +119,7 @@ def test_local_version_mismatch_is_a_file_exists_error(tmp_path: Path):
     )
     local = LocalDataset.from_dir(tmp_path)
     assert local is not None
-    with pytest.raises(FileExistsError) as info:
+    with pytest.raises(FileExistsError, match="v2.0.0.*v1.0.0") as info:
         local.assert_compatible_with(dataset="nm000132", tag="v2.0.0")
     # Same exception is ALSO a LocalVersionMismatchError and a NemarError.
     assert isinstance(info.value, LocalVersionMismatchError)
@@ -128,7 +136,9 @@ def test_local_doi_mismatch_is_a_runtime_error(tmp_path: Path):
     )
     local = LocalDataset.from_dir(tmp_path)
     assert local is not None
-    with pytest.raises(RuntimeError) as info:
+    with pytest.raises(
+        RuntimeError, match="different NEMAR dataset"
+    ) as info:
         local.assert_compatible_with(dataset="nm000132", tag="v1.0.0")
     assert isinstance(info.value, LocalTargetError)
     # DOI mismatch is NOT a FileExistsError — only version mismatch is.
@@ -144,7 +154,9 @@ def test_verification_failure_is_a_runtime_error(tmp_path: Path):
         url="https://data.nemar.org/missing.txt",
         size=10,
     )
-    with pytest.raises(RuntimeError) as info:
+    with pytest.raises(
+        RuntimeError, match="Expected downloaded file is missing"
+    ) as info:
         assert_all_present(
             [file], target_dir=tmp_path, policy=VerifyPolicy()
         )
@@ -163,7 +175,9 @@ def test_transfer_no_aria2c_is_a_runtime_error(monkeypatch):
         stream_timeout=60.0,
         aria2_timeout=None,
     )
-    with pytest.raises(RuntimeError) as info:
+    with pytest.raises(
+        RuntimeError, match='"aria2" downloader requires aria2c'
+    ) as info:
         select_backend(options)
     assert isinstance(info.value, TransferError)
 
@@ -181,7 +195,7 @@ def test_transport_invalid_json_is_a_runtime_error():
     transport = httpx.MockTransport(handler)
     policy = RetryPolicy.default().with_attempts(0)
     with httpx.Client(transport=transport) as client:
-        with pytest.raises(RuntimeError) as info:
+        with pytest.raises(RuntimeError, match="Invalid JSON") as info:
             fetch_json(
                 client,
                 url="https://data.nemar.org/nm000132/",

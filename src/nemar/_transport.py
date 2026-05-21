@@ -4,16 +4,16 @@ This module owns the HTTP transport primitive every metadata read shares:
 issue a JSON ``GET``, classify the response against the configured
 :class:`~nemar._retry.RetryPolicy`, validate the final URL against the
 configured :class:`~nemar._endpoint.DataEndpoint` after any redirects,
-and reshape exhausted retries into a ``RuntimeError`` whose message names
-what the caller was trying to do.
+and reshape exhausted retries into a :class:`TransportError` whose
+message names what the caller was trying to do.
 
 Two control-flow exception types live here so the retry loop and the
 per-file transfer's retry loop can share the same vocabulary:
 
 * :class:`_RetryableError` -- raised internally when a single attempt
   failed in a way the policy permits retrying. Callers should not catch
-  it; the loop translates it into a final ``RuntimeError`` once retries
-  exhaust.
+  it; the loop translates it into a final :class:`TransportError` once
+  retries exhaust.
 * :class:`_RetryFreshError` -- a subclass of :class:`_RetryableError`
   used by the per-file transfer (``_download._transfer_one_with_python``)
   to ask its outer loop to abandon any local partial bytes and retry
@@ -65,11 +65,11 @@ def fetch_json(
 
     * Retryable HTTP status (per ``policy.retryable_status``): retry,
       sleeping for ``policy.next_delay`` between attempts. After the
-      final attempt, reshape into a ``RuntimeError`` whose message
+      final attempt, reshape into a :class:`TransportError` whose message
       starts with ``"Retryable error when {what}"``.
     * Non-retryable HTTP error: reshape immediately into a
-      ``RuntimeError`` whose message starts with ``"Error when {what}:
-      HTTP {status} {detail}"``.
+      :class:`TransportError` whose message starts with ``"Error when
+      {what}: HTTP {status} {detail}"``.
     * Retryable transport exception (per ``policy.retryable_exceptions``):
       retry; on exhaustion reshape into ``"Network error when {what}: ..."``.
     * ``json.JSONDecodeError``: reshape immediately into
@@ -131,7 +131,7 @@ def _response_detail(response: httpx.Response) -> str:
     falls back to the JSON text (truncated), then to the plain text body
     (truncated). Used by :func:`fetch_json` when an HTTP status indicates
     an error and a single-line detail is wanted in the raised
-    ``RuntimeError``.
+    :class:`TransportError`.
     """
     try:
         payload = response.json()

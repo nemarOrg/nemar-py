@@ -66,7 +66,7 @@ class LocalDataset:
            still want to log this; see the note in :mod:`nemar._download`).
 
         Returns a populated instance when ``dataset_description.json``
-        is present. Raises :class:`RuntimeError` if the file is present
+        is present. Raises :class:`LocalTargetError` if the file is present
         but malformed (bad JSON, missing/non-string ``DatasetDOI``,
         non-string ``Version``) so silent corruption can never sneak
         through.
@@ -115,13 +115,15 @@ class LocalDataset:
     def assert_compatible_with(self, *, dataset: str, tag: str) -> None:
         """Raise if downloading ``dataset`` ``tag`` here would clobber data.
 
-        * Raises :class:`RuntimeError` if the local DOI prefix names a
+        * Raises :class:`LocalTargetError` if the local DOI prefix names a
           *different* dataset.
-        * Raises :class:`RuntimeError` if the DOI matches but no
+        * Raises :class:`LocalTargetError` if the DOI matches but no
           Version was recorded -- continuing would risk silently
           mixing two versions of the same dataset.
-        * Raises :class:`FileExistsError` if the DOI matches but the
-          Version is a different tag than the one requested.
+        * Raises :class:`LocalVersionMismatchError` (a subclass of both
+          :class:`LocalTargetError` and the builtin :class:`FileExistsError`)
+          if the DOI matches but the Version is a different tag than the
+          one requested.
 
         Pure: no filesystem access. ``self`` already carries the
         parsed identity.

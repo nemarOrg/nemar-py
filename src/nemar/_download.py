@@ -127,8 +127,7 @@ def _run(request: DownloadRequest) -> None:
        and guard against case-insensitive-filesystem collisions.
     6. Transfer the selected files.
     """
-    endpoint = request.endpoint
-    data_url = endpoint.url
+    data_url = request.endpoint.url
 
     tqdm.write(f"This is nemar-py {__version__}.")
     tqdm.write(f"Preparing to download {request.dataset} from {data_url}")
@@ -194,7 +193,6 @@ def _run(request: DownloadRequest) -> None:
         f"{len(selected_files)} of {len(files)} manifest files "
         f"({request.transfer.max_concurrent_downloads} concurrent downloads)."
     )
-    request.target_path.mkdir(parents=True, exist_ok=True)
     # Trust size pre-transfer; the post-transfer ``assert_all_present`` is
     # the real gate that re-checks the hash on every file. Hashing every
     # already-present file before the network does anything would re-read
@@ -279,7 +277,4 @@ def _target_has_files_without_description(target_dir: Path) -> bool:
     if next(target_dir.iterdir(), None) is None:
         return False
     return not (target_dir / "dataset_description.json").exists()
-
-
-
 
