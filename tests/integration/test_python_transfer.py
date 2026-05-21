@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 import nemar
-from nemar import _download
+from nemar import _transfer
 from nemar._models import DatasetFile
 from tests.fixtures.factories import (
     make_blob,
@@ -133,7 +133,7 @@ def test_progress_does_not_overshoot_when_server_ignores_range(
         with TrackingProgress(
             total=len(data), desc="test", unit="B", unit_scale=True
         ) as progress:
-            _download._transfer_one_attempt(
+            _transfer._transfer_one_attempt(
                 file,
                 outfile=out,
                 progress=progress,
@@ -277,7 +277,7 @@ def test_http_416_on_resume_retries_fresh(tmp_path) -> None:
         with _tqdm(
             total=len(data), desc="test", unit="B", unit_scale=True
         ) as progress:
-            _download._transfer_one_with_python(
+            _transfer._transfer_one_with_python(
                 file,
                 target,
                 True,  # verify_hash

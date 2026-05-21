@@ -222,3 +222,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 mutants/
+
+# Claude Code worktrees and agent state
+.claude/

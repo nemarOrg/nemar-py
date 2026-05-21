@@ -22,6 +22,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
+from nemar._errors import EndpointError
+
 
 @dataclass(frozen=True)
 class DataEndpoint:
@@ -52,14 +54,14 @@ class DataEndpoint:
         return cls(url=normalized, scheme=parsed.scheme, netloc=parsed.netloc)
 
     def assert_within(self, url: str) -> None:
-        """Raise ``RuntimeError`` if ``url`` is not on this endpoint's origin.
+        """Raise :class:`EndpointError` if ``url`` is not on this endpoint's origin.
 
         The message wording matches ``_models._validate_data_origin`` so the
         existing parser tests keep matching after delegation.
         """
         parsed = urlparse(url)
         if parsed.scheme != self.scheme or parsed.netloc != self.netloc:
-            raise RuntimeError(
+            raise EndpointError(
                 "Refusing to download a file outside the configured NEMAR "
                 f"data origin: {url}. This downloader is intentionally "
                 f"scoped to {self.url}."

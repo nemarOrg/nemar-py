@@ -107,3 +107,63 @@ class TestImmutability:
     def test_files_is_tuple(self) -> None:
         manifest = _parse_payload([{"path": "a.json"}])
         assert isinstance(manifest.files, tuple)
+
+
+class TestPathLookup:
+    """``VersionManifest`` exposes O(1) lookup by manifest-relative path."""
+
+    def test_file_returns_dataset_file_for_existing_path(self) -> None:
+        manifest = _parse_payload(
+            [
+                {"path": "dataset_description.json", "size": 12},
+                {"path": "sub-001/eeg/sub-001_task-MMN_eeg.set", "size": 99},
+            ]
+        )
+
+        resolved = manifest.file("sub-001/eeg/sub-001_task-MMN_eeg.set")
+
+        assert isinstance(resolved, DatasetFile)
+        assert resolved.path == "sub-001/eeg/sub-001_task-MMN_eeg.set"
+        assert resolved.size == 99
+        # The same DatasetFile instance the iterator would surface — no copy.
+        assert resolved is manifest.files[1]
+
+    def test_file_missing_path_raises_runtime_error_with_message(self) -> None:
+        manifest = _parse_payload([{"path": "dataset_description.json"}])
+
+        missing = "sub-001/eeg/sub-001_task-MMN_eeg.set"
+        with pytest.raises(RuntimeError) as excinfo:
+            manifest.file(missing)
+
+        message = str(excinfo.value)
+        assert missing in message
+        assert MANIFEST_URL in message
+
+    def test_contains_reports_presence(self) -> None:
+        manifest = _parse_payload(
+            [
+                {"path": "a.json"},
+                {"path": "sub-001/eeg/sub-001_task-MMN_eeg.set"},
+            ]
+        )
+
+        assert "a.json" in manifest
+        assert "sub-001/eeg/sub-001_task-MMN_eeg.set" in manifest
+        assert "missing.json" not in manifest
+
+    def test_lookup_works_for_dict_shaped_payload(self) -> None:
+        # The ``files``-keyed mapping shape exercises ``_mapping_entries``.
+        manifest = _parse_payload(
+            {
+                "files": {
+                    "dataset_description.json": {"size": 12},
+                    "sub-001/eeg/sub-001_task-MMN_eeg.set": {"size": 99},
+                }
+            }
+        )
+
+        resolved = manifest.file("sub-001/eeg/sub-001_task-MMN_eeg.set")
+        assert resolved.path == "sub-001/eeg/sub-001_task-MMN_eeg.set"
+        assert resolved.size == 99
+        assert "dataset_description.json" in manifest
+        assert "absent.json" not in manifest

@@ -111,12 +111,21 @@ ignore = [
 "tests/**" = ["D"]
 
 [tool.mutmut]
+# Modules with substantive logic (parsers, value types, retry loops). Excludes
+# pure-declaration modules (_errors.py) and large transfer-side code where
+# subprocess + network mocks dominate the runtime cost.
 paths_to_mutate = [
   "src/nemar/_bids.py",
+  "src/nemar/_client.py",
+  "src/nemar/_endpoint.py",
   "src/nemar/_glob.py",
+  "src/nemar/_local_dataset.py",
   "src/nemar/_models.py",
+  "src/nemar/_selection.py",
+  "src/nemar/_transport.py",
 ]
-tests_dir = ["tests/unit", "tests/property"]
+# mutmut expects a colon-separated string here, not a list.
+tests_dir = "tests/unit:tests/property"
 pytest_add_cli_args = [
   "-x",
   "-q",
