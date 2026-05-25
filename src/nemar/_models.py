@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import urljoin
@@ -11,6 +11,7 @@ from urllib.parse import urljoin
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from nemar._endpoint import DataEndpoint
+from nemar._errors import DatasetIndexError, ManifestError
 
 
 class DatasetVersion(BaseModel):
@@ -43,7 +44,7 @@ class DatasetIndex(BaseModel):
                 return version
 
         available = ", ".join(v.version for v in self.versions) or "none"
-        raise RuntimeError(
+        raise DatasetIndexError(
             f'The requested NEMAR version "{requested}" does not exist for '
             f"{self.dataset_id}. Available versions: {available}"
         )
@@ -65,7 +66,7 @@ def parse_dataset_index(payload: Any) -> DatasetIndex:
     try:
         return DatasetIndex.model_validate(payload)
     except ValidationError as exc:
-        raise RuntimeError(
+        raise DatasetIndexError(
             "The NEMAR data endpoint returned an unexpected dataset index "
             f"payload: {exc.errors(include_input=False)}"
         ) from exc
@@ -80,11 +81,38 @@ class VersionManifest:
     whose origin they must respect. Duplicate-path detection and the
     origin-scoping rule live on the value type itself so the invariants
     survive past the parser.
+
+    The path-keyed lookup index lives in a private ``_index`` field built
+    eagerly in ``__post_init__``. Building it during construction (instead
+    of lazily caching on first access) folds the existing duplicate-path
+    detection into the same single pass, so the uniqueness invariant is
+    enforced for *any* construction path (``parse``, ``dataclasses.replace``,
+    direct ``cls(...)``) — not just the parser.
     """
 
     files: tuple[DatasetFile, ...]
     manifest_url: str
     endpoint: DataEndpoint
+    _index: dict[str, DatasetFile] = field(
+        init=False, repr=False, compare=False, hash=False, default_factory=dict
+    )
+
+    def __post_init__(self) -> None:
+        index: dict[str, DatasetFile] = {}
+        duplicates: set[str] = set()
+        for file in self.files:
+            if file.path in index:
+                duplicates.add(file.path)
+            else:
+                index[file.path] = file
+        if duplicates:
+            examples = ", ".join(sorted(duplicates)[:5])
+            raise ManifestError(
+                f"The NEMAR manifest contains duplicate paths: {examples}"
+            )
+        # ``self`` is frozen; bypass the dataclass setattr guard the same
+        # way the dataclass machinery would for a default field.
+        object.__setattr__(self, "_index", index)
 
     @classmethod
     def parse(
@@ -108,23 +136,31 @@ class VersionManifest:
             for entry in entries
         )
         if not files:
-            raise RuntimeError(
+            raise ManifestError(
                 "The NEMAR manifest did not contain any downloadable files."
             )
 
-        seen: set[str] = set()
-        duplicates: set[str] = set()
-        for file in files:
-            if file.path in seen:
-                duplicates.add(file.path)
-            seen.add(file.path)
-        if duplicates:
-            examples = ", ".join(sorted(duplicates)[:5])
-            raise RuntimeError(
-                f"The NEMAR manifest contains duplicate paths: {examples}"
-            )
-
         return cls(files=files, manifest_url=manifest_url, endpoint=endpoint)
+
+    def file(self, relpath: str) -> DatasetFile:
+        """Return the :class:`DatasetFile` for ``relpath`` in O(1).
+
+        Raises :class:`ManifestError` if the manifest does not advertise the
+        requested relative path. The error message names both the missing
+        path and the manifest URL it was resolved against so callers can
+        diagnose stale or wrong-version selections without re-reading the
+        manifest themselves.
+        """
+        try:
+            return self._index[relpath]
+        except KeyError:
+            raise ManifestError(
+                f"The NEMAR manifest at {self.manifest_url} does not advertise "
+                f"a file at {relpath!r}."
+            ) from None
+
+    def __contains__(self, relpath: object) -> bool:
+        return isinstance(relpath, str) and relpath in self._index
 
     def __iter__(self) -> Iterator[DatasetFile]:
         return iter(self.files)
@@ -139,7 +175,7 @@ def _iter_manifest_entries(payload: Any) -> Iterable[Any]:
         return
 
     if not isinstance(payload, Mapping):
-        raise RuntimeError("The NEMAR manifest must be a JSON object or array.")
+        raise ManifestError("The NEMAR manifest must be a JSON object or array.")
 
     for key in ("files", "entries", "manifest", "objects"):
         value = payload.get(key)
@@ -154,7 +190,7 @@ def _iter_manifest_entries(payload: Any) -> Iterable[Any]:
         yield from _mapping_entries(payload)
         return
 
-    raise RuntimeError(
+    raise ManifestError(
         "The NEMAR manifest JSON shape is not recognized. Expected a list of "
         "files or an object with a files/entries/manifest key."
     )
@@ -198,7 +234,7 @@ def _entry_to_file(
         sha256 = _coerce_hash(_first_value(entry, "sha256", "sha256sum"))
         md5 = _coerce_hash(_first_value(entry, "md5", "md5sum", "etag"))
     else:
-        raise RuntimeError(f"Unsupported manifest entry type: {type(entry).__name__}")
+        raise ManifestError(f"Unsupported manifest entry type: {type(entry).__name__}")
 
     path = _validate_relative_path(raw_path)
     url = _resolve_file_url(raw_url, path=path, manifest_url=manifest_url)
@@ -217,13 +253,24 @@ def _first_value(entry: Mapping[str, Any], *keys: str) -> Any:
 
 def _validate_relative_path(raw_path: Any) -> str:
     if not isinstance(raw_path, str) or not raw_path:
-        raise RuntimeError("Manifest entry is missing a non-empty relative path.")
+        raise ManifestError("Manifest entry is missing a non-empty relative path.")
     if "\x00" in raw_path:
-        raise RuntimeError(f"Manifest path contains a NUL byte: {raw_path!r}")
+        raise ManifestError(f"Manifest path contains a NUL byte: {raw_path!r}")
+    # Reject ASCII control characters (newline, CR, tab, etc.) and DEL. The
+    # aria2 input-file format uses `\n` as a stanza separator, so a path
+    # containing one would let a malicious manifest inject a second URL +
+    # arbitrary `out=` directive — bypassing the DataEndpoint origin guard
+    # because the bytes-on-the-wire phase trusts the parsed manifest paths.
+    # Keep this check before the PurePosixPath round-trip so that the parser
+    # rejects the input rather than relying on incidental ``..`` detection.
+    if any(ord(c) < 0x20 or c == "\x7f" for c in raw_path):
+        raise ManifestError(
+            f"Manifest path contains control characters: {raw_path!r}"
+        )
 
     path = PurePosixPath(raw_path)
     if path.is_absolute() or ".." in path.parts:
-        raise RuntimeError(f"Unsafe manifest path: {raw_path!r}")
+        raise ManifestError(f"Unsafe manifest path: {raw_path!r}")
     return path.as_posix()
 
 
@@ -232,7 +279,7 @@ def _resolve_file_url(raw_url: Any, *, path: str, manifest_url: str) -> str:
         version_root = manifest_url.rsplit("/", 1)[0] + "/"
         return urljoin(version_root, path)
     if not isinstance(raw_url, str) or not raw_url:
-        raise RuntimeError(f"Manifest URL for {path} is not a non-empty string.")
+        raise ManifestError(f"Manifest URL for {path} is not a non-empty string.")
     return urljoin(manifest_url, raw_url)
 
 
@@ -243,7 +290,7 @@ def _coerce_size(value: Any) -> int | None:
         return value
     if isinstance(value, str) and value.isdigit():
         return int(value)
-    raise RuntimeError(f"Manifest file size is not an integer: {value!r}")
+    raise ManifestError(f"Manifest file size is not an integer: {value!r}")
 
 
 def _coerce_hash(value: Any) -> str | None:
@@ -259,7 +306,7 @@ def _coerce_hash(value: Any) -> str | None:
     if value in (None, ""):
         return None
     if not isinstance(value, str):
-        raise RuntimeError(f"Manifest checksum is not a string: {value!r}")
+        raise ManifestError(f"Manifest checksum is not a string: {value!r}")
     value = value.strip()
     # ``W/"abc"`` -> strip ``W/`` -> ``"abc"`` -> strip outer quotes -> ``abc``.
     # We strip ``W/`` both before and after the quote strip so we cover

@@ -7,7 +7,7 @@ import shutil
 import pytest
 
 import nemar
-from nemar import _download
+from nemar import _transfer
 from tests.fixtures.factories import (
     make_blob,
     make_index,
@@ -34,9 +34,9 @@ def aria2_skip_cert_check(monkeypatch):
     ``--ca-certificate``. The fixture server is signed by a private trustme
     CA, so we have to disable cert verification for the test to reach the
     HTTPS endpoint at all. Confined to tests via the ``_ARIA2_EXTRA_ARGS``
-    private hook on ``nemar._download``.
+    private hook on ``nemar._transfer``.
     """
-    monkeypatch.setattr(_download, "_ARIA2_EXTRA_ARGS", ["--check-certificate=false"])
+    monkeypatch.setattr(_transfer, "_ARIA2_EXTRA_ARGS", ["--check-certificate=false"])
 
 
 def test_aria2c_downloads_one_file(nemar_endpoint, target_dir, aria2_skip_cert_check):

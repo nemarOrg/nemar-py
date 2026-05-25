@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from difflib import get_close_matches
 
 from nemar import _bids, _glob
+from nemar._errors import SelectionError
 from nemar._models import DatasetFile
 
 ESSENTIAL_BIDS_FILES = frozenset(
@@ -95,7 +96,7 @@ class SelectionPlan:
                 path for path, bids_path in parsed if bids_path.matches(query)
             )
             if not matched:
-                raise RuntimeError(_zero_match_message(query, parsed))
+                raise SelectionError(_zero_match_message(query, parsed))
 
         matched_set = set(matched)
 
@@ -163,7 +164,7 @@ class SelectionPlan:
                 extra = " Perhaps you mean: " + ", ".join(candidates[:5])
             else:
                 extra = ""
-            raise RuntimeError(
+            raise SelectionError(
                 f"Could not find path in the NEMAR manifest: {pattern}.{extra}"
             )
 

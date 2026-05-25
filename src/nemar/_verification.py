@@ -37,6 +37,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
+from nemar._errors import VerificationError
 from nemar._models import DatasetFile
 
 
@@ -147,7 +148,7 @@ def assert_all_present(
         result = check(file, path, policy)
         if result is VerifyResult.OK:
             continue
-        raise RuntimeError(_describe_failure(file, path, result))
+        raise VerificationError(_describe_failure(file, path, result))
 
 
 def detect_case_collisions(

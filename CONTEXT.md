@@ -8,6 +8,14 @@
   which owns HTTPS validation, trailing-slash normalization, and the
   origin-scoping rule applied to every dataset-index, metadata, manifest,
   and per-file URL (including after HTTP redirects).
+- **NEMAR client**: A long-lived handle to the NEMAR data endpoint, modeled
+  as the `NEMARClient` context manager (`src/nemar/_client.py`). Owns one
+  `httpx.Client` and exposes `fetch_index`, `fetch_metadata`,
+  `fetch_manifest` against the configured `DataEndpoint`. The orchestrator
+  and the public metadata helpers (`fetch_dataset_index`,
+  `list_dataset_versions`) construct one internally; library callers can
+  hold one open across many datasets to amortize TLS and connection-pool
+  cost.
 - **Dataset index**: The JSON document at `/{dataset}/` that advertises the
   latest version, metadata URL, and version manifest URLs.
 - **NEMAR metadata**: The dataset-level metadata document advertised by the
@@ -27,10 +35,17 @@
   `derivatives`, `stimuli`, `sourcedata`, or `code`. Derivatives may additionally
   be selected by pipeline name from `derivatives/<pipeline>/`.
 - **Transfer backend**: The concrete download implementation used after file
-  selection. `aria2c` is preferred for speed; the built-in Python downloader is
-  the fallback. The backend choice and its runtime knobs (concurrency, stream
-  timeout, aria2 timeout) are bundled in the `TransferOptions` value type
-  (`src/nemar/_request.py`), which travels inside a `DownloadRequest`.
+  selection. Modeled as two adapters of one seam, both exposing the
+  `TransferBackend` protocol in `src/nemar/_transfer.py`: `Aria2Backend`
+  (preferred for speed, shells out to the `aria2c` subprocess) and
+  `PythonBackend` (always-available fallback, thread pool over a shared
+  `httpx.Client` with a per-batch connection pool). Selection is policy-driven
+  via `TransferOptions.backend` ("auto" | "aria2" | "python") and resolved by
+  `select_backend` in `src/nemar/_transfer.py`; "auto" picks `aria2c` when on
+  PATH and falls back to the Python adapter otherwise. The backend choice and
+  its runtime knobs (concurrency, stream timeout, aria2 timeout) are bundled in
+  the `TransferOptions` value type (`src/nemar/_request.py`), which travels
+  inside a `DownloadRequest`.
 - **Download request**: A `DownloadRequest` value type
   (`src/nemar/_request.py`) bundling the normalized dataset identity,
   `DataEndpoint`, requested tag, target path, BIDS query, include/exclude
@@ -38,6 +53,11 @@
   policies. Library and CLI callers construct one via
   `DownloadRequest.from_kwargs(...)`; the orchestrator's six algorithmic
   steps (`_run`) execute against it.
+- **Transport**: The JSON-fetch-with-retries primitive used by every metadata
+  read against the NEMAR data endpoint. Modeled internally as `fetch_json` in
+  `src/nemar/_transport.py`. Owns the redirect-origin check, retryable-status
+  classification (delegated to `RetryPolicy`), and exhausted-retry error
+  reshaping.
 - **Verification**: The single predicate "does this local file satisfy its
   manifest entry?", modeled in `src/nemar/_verification.py` as
   `check(file, path, policy) -> VerifyResult`. Used as a filter before transfer
@@ -47,6 +67,34 @@
   the NEMAR endpoint writes when an object is unavailable). The same module
   exposes `detect_case_collisions`, the pre-transfer guard against
   case-insensitive filesystem clashes that would silently overwrite data.
+- **Local dataset**: The on-disk view of a NEMAR dataset, modeled as the
+  `LocalDataset` value type (`src/nemar/_local_dataset.py`). Inspects a
+  target directory and asserts that any pre-existing
+  `dataset_description.json` identifies the same dataset and the requested
+  version, refusing to overwrite a different version's files. Construction
+  (`LocalDataset.from_dir`) is the only disk-touching step; the
+  `assert_compatible_with` instance method is pure reasoning over the
+  parsed identity.
+- **Single-file download**: The smallest useful transfer operation, modeled
+  as the public function `nemar.download_one(file, target_path, *,
+  client=None, retry=None, verify=None)` in `src/nemar/_transfer.py`. Owns
+  range-resume, HTTP 416 recovery, jittered retry, and final verify for one
+  URL → one path. The `PythonBackend` uses it internally per file (via a
+  shared `_stream_with_retries` helper); external callers can reach it
+  without invoking the full bulk orchestrator.
+- **Error hierarchy**: All library-raised failures inherit from
+  `nemar.NemarError` (which itself subclasses `RuntimeError` for backward
+  compatibility with legacy callers). Subclasses align with the modules
+  that own each failure mode: `EndpointError` (off-origin),
+  `DatasetIndexError` (index payload / version resolution), `ManifestError`
+  (manifest shape / content), `SelectionError` (BIDS selection, case
+  collisions), `TransportError` (JSON-fetch retries exhausted, HTTP,
+  decode), `TransferError` (bytes-on-the-wire), `VerificationError` (local
+  file fails its manifest entry), `LocalTargetError` (target dir holds a
+  different dataset), and `LocalVersionMismatchError` which additionally
+  subclasses `FileExistsError` so legacy callers that catch the builtin
+  keep working. Defined in `src/nemar/_errors.py`. `ValueError` stays for
+  input validation at the public boundary.
 
 ## Architectural Notes
 
