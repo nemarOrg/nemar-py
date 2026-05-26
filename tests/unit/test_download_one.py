@@ -1,4 +1,4 @@
-"""Unit tests for ``nemar.download_one``.
+"""Unit tests for ``download_one``.
 
 The public per-file streaming primitive. These tests pin the contract
 documented for ``download_one``: it builds its own short-lived client by
@@ -21,10 +21,10 @@ from pathlib import Path
 import httpx
 import pytest
 
-import nemar
 from nemar._models import DatasetFile
 from nemar._retry import RetryPolicy
 from nemar._verification import VerifyPolicy, VerifyResult
+from nemar.transfer import download_one
 
 
 def _make_file(
@@ -68,7 +68,7 @@ def test_happy_path_writes_file_and_returns_ok(monkeypatch, tmp_path: Path) -> N
 
     monkeypatch.setattr(httpx.Client, "__init__", patched_init)
 
-    result = nemar.download_one(file, target)
+    result = download_one(file, target)
 
     assert result is VerifyResult.OK
     assert target.exists()
@@ -100,7 +100,7 @@ def test_caller_supplied_client_is_reused(tmp_path: Path) -> None:
 
     transport = httpx.MockTransport(handler)
     with httpx.Client(transport=transport) as client:
-        result = nemar.download_one(file, target, client=client)
+        result = download_one(file, target, client=client)
         # The caller's client must still be usable after download_one
         # returns (one-shot does not close caller-owned clients).
         assert not client.is_closed
@@ -137,7 +137,7 @@ def test_default_client_is_built_and_torn_down(monkeypatch, tmp_path: Path) -> N
 
     monkeypatch.setattr(httpx.Client, "__init__", patched_init)
 
-    result = nemar.download_one(file, target)
+    result = download_one(file, target)
 
     assert result is VerifyResult.OK
     assert target.read_bytes() == content
@@ -175,7 +175,7 @@ def test_size_mismatch_returns_verify_result(monkeypatch, tmp_path: Path) -> Non
 
     monkeypatch.setattr(httpx.Client, "__init__", patched_init)
 
-    result = nemar.download_one(file, target)
+    result = download_one(file, target)
 
     assert result is VerifyResult.SIZE_MISMATCH
     # The bytes the server delivered still land on disk; the verify
@@ -213,7 +213,7 @@ def test_http_500_retried_then_succeeds(tmp_path: Path) -> None:
         retryable_exceptions=base_policy.retryable_exceptions,
     )
     with httpx.Client(transport=transport) as client:
-        result = nemar.download_one(
+        result = download_one(
             file,
             target,
             client=client,
@@ -246,7 +246,7 @@ def test_no_retries_raises_runtime_error_on_irrecoverable_failure(
     transport = httpx.MockTransport(handler)
     with httpx.Client(transport=transport) as client:
         with pytest.raises(RuntimeError, match="hard-fail.bin"):
-            nemar.download_one(
+            download_one(
                 file,
                 target,
                 client=client,
@@ -277,7 +277,7 @@ def test_verify_policy_is_honored(tmp_path: Path) -> None:
 
     transport = httpx.MockTransport(handler)
     with httpx.Client(transport=transport) as client:
-        result = nemar.download_one(
+        result = download_one(
             file,
             target,
             client=client,
@@ -300,8 +300,53 @@ def test_parent_directory_is_created_on_demand(tmp_path: Path) -> None:
 
     transport = httpx.MockTransport(handler)
     with httpx.Client(transport=transport) as client:
-        result = nemar.download_one(file, target, client=client)
+        result = download_one(file, target, client=client)
 
     assert result is VerifyResult.OK
     assert target.parent.is_dir()
     assert target.read_bytes() == content
+
+
+def test_existing_symlink_at_target_is_replaced_not_followed(
+    tmp_path: Path,
+) -> None:
+    """A pre-existing symlink at ``target_path`` is unlinked before write.
+
+    Regression guard against the DataLad-then-HTTPS interaction: when
+    the layered backend's DataLad attempt partially succeeds it can
+    leave git-annex symlinks at the manifest paths (broken symlinks
+    pointing into ``.git/annex/objects/...``). Without an unlink-first
+    guard, ``open(symlink, "wb")`` would follow the symlink and write
+    the new content at the annex object path instead of the manifest
+    path — leaving the on-disk dataset and the git-annex tree in
+    inconsistent states.
+
+    We assert two invariants: the target ends as a regular file with
+    the downloaded content, and the original symlink target is NOT
+    written to.
+    """
+    content = b"https path must overwrite the symlink, not follow it"
+    file = _make_file(content)
+    fake_annex_target = tmp_path / ".not-an-annex" / "object.bin"
+    fake_annex_target.parent.mkdir(parents=True)
+    # Pre-existing broken symlink at the manifest path. Matches the shape
+    # of a git-annex placeholder when the annex object has not yet been
+    # materialized.
+    target = tmp_path / file.path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.symlink_to(fake_annex_target)
+    assert target.is_symlink() and not target.exists()  # broken symlink
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=content, request=request)
+
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport) as client:
+        result = download_one(file, target, client=client)
+
+    assert result is VerifyResult.OK
+    assert not target.is_symlink()  # regular file now
+    assert target.read_bytes() == content
+    # The annex-shaped target was not written through: nothing materialized
+    # at the symlink destination, no accidental annex-tree mutation.
+    assert not fake_annex_target.exists()

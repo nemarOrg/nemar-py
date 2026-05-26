@@ -7,7 +7,7 @@ in particular) would consume together:
    for many fetches).
 2. :func:`nemar.VersionManifest.file` — random-access per-relpath lookup
    into a parsed manifest.
-3. :func:`nemar.download_one` — single-file streaming primitive.
+3. :func:`download_one` — single-file streaming primitive.
 
 This test runs the three of them in sequence against the local HTTPS
 fixture server. If this passes, the eegdash integration story holds.
@@ -21,6 +21,8 @@ import httpx
 import pytest
 
 import nemar
+from nemar._verification import VerifyResult
+from nemar.transfer import download_one
 from tests.fixtures.factories import (
     make_blob,
     make_index,
@@ -65,8 +67,8 @@ def test_client_manifest_file_lookup_download_one_round_trip(
         assert file.sha256 == hashlib.sha256(blob.content).hexdigest()
         assert file.size == len(blob.content)
 
-        result = nemar.download_one(file, target_file)
-        assert result is nemar.VerifyResult.OK
+        result = download_one(file, target_file)
+        assert result is VerifyResult.OK
 
     assert target_file.exists()
     assert target_file.read_bytes() == blob.content
@@ -130,7 +132,7 @@ def test_download_one_with_shared_client_works(nemar_endpoint, target_dir):
         # (matches PythonBackend's posture).
         with httpx.Client(follow_redirects=False, timeout=30.0) as transfer_client:
             target_file = target_dir / "out.bin"
-            nemar.download_one(file, target_file, client=transfer_client)
+            download_one(file, target_file, client=transfer_client)
             assert target_file.read_bytes() == blob.content
             # Caller-supplied client must NOT be closed by download_one.
             assert not transfer_client.is_closed

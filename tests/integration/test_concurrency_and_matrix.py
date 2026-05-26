@@ -23,6 +23,7 @@ import pytest
 import nemar
 from nemar._retry import RetryPolicy
 from nemar._verification import VerifyPolicy, VerifyResult
+from nemar.transfer import download_one
 from tests.fixtures.factories import (
     make_blob,
     make_index,
@@ -70,7 +71,7 @@ def test_concurrent_download_one_calls_share_httpx_client(nemar_endpoint, target
                 out_path = target_dir / f"out_{i:03d}.bin"
                 futures.append(
                     pool.submit(
-                        nemar.download_one,
+                        download_one,
                         file,
                         out_path,
                         client=transfer_client,
@@ -167,7 +168,7 @@ def test_full_download_then_per_file_download_one_share_endpoint(
         file = manifest.file("file_001.bin")
 
         single_path = tmp_path / "single.bin"
-        result = nemar.download_one(
+        result = download_one(
             file,
             single_path,
             retry=RetryPolicy.default().with_attempts(0),
@@ -188,7 +189,7 @@ def test_nemar_client_with_verify_policy_round_trip(nemar_endpoint, target_dir):
         manifest = client.fetch_manifest(index, version)
         file = manifest.file("file_000.bin")
 
-        result = nemar.download_one(
+        result = download_one(
             file,
             target_dir / "no_hash.bin",
             verify=VerifyPolicy(verify_size=True, verify_hash=False),

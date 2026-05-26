@@ -177,6 +177,16 @@ class TestInvalidInputsRaise:
         with pytest.raises(ValueError, match="downloader must be one of"):
             DownloadRequest.from_kwargs(**_minimum_kwargs(downloader="curl"))
 
+    def test_datalad_downloader_is_accepted(self) -> None:
+        """``datalad`` is the third valid backend choice.
+
+        The actual DataLad work is gated on whether the dataset index
+        advertises a ``datalad_url``; the validation here only checks
+        that the policy string is recognized.
+        """
+        req = DownloadRequest.from_kwargs(**_minimum_kwargs(downloader="datalad"))
+        assert req.transfer.backend == "datalad"
+
     def test_empty_tag_raises(self) -> None:
         with pytest.raises(ValueError, match="tag must not be empty"):
             DownloadRequest.from_kwargs(**_minimum_kwargs(tag="  "))

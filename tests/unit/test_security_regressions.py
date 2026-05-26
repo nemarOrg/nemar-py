@@ -85,8 +85,8 @@ class TestDownloadOneAcceptsEndpoint:
     def test_download_one_rejects_off_origin_url_when_endpoint_passed(
         self, tmp_path
     ) -> None:
-        import nemar
         from nemar._models import DatasetFile
+        from nemar.transfer import download_one
 
         endpoint = DataEndpoint.from_url("https://data.nemar.org/")
         evil_file = DatasetFile(
@@ -96,7 +96,7 @@ class TestDownloadOneAcceptsEndpoint:
         )
 
         with pytest.raises(EndpointError, match="Refusing to download"):
-            nemar.download_one(
+            download_one(
                 evil_file,
                 tmp_path / "legit.bin",
                 endpoint=endpoint,

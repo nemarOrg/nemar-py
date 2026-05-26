@@ -35,17 +35,50 @@
   `derivatives`, `stimuli`, `sourcedata`, or `code`. Derivatives may additionally
   be selected by pipeline name from `derivatives/<pipeline>/`.
 - **Transfer backend**: The concrete download implementation used after file
-  selection. Modeled as two adapters of one seam, both exposing the
-  `TransferBackend` protocol in `src/nemar/_transfer.py`: `Aria2Backend`
-  (preferred for speed, shells out to the `aria2c` subprocess) and
-  `PythonBackend` (always-available fallback, thread pool over a shared
-  `httpx.Client` with a per-batch connection pool). Selection is policy-driven
-  via `TransferOptions.backend` ("auto" | "aria2" | "python") and resolved by
-  `select_backend` in `src/nemar/_transfer.py`; "auto" picks `aria2c` when on
-  PATH and falls back to the Python adapter otherwise. The backend choice and
-  its runtime knobs (concurrency, stream timeout, aria2 timeout) are bundled in
-  the `TransferOptions` value type (`src/nemar/_request.py`), which travels
-  inside a `DownloadRequest`.
+  selection. Modeled as adapters of one seam, all exposing the
+  `TransferBackend` protocol in `src/nemar/_transfer.py`. Three HTTPS-only
+  adapters and one optional first-layer adapter exist:
+  - `Aria2Backend` (preferred HTTPS adapter, shells out to the `aria2c`
+    subprocess).
+  - `PythonBackend` (always-available HTTPS fallback, thread pool over a
+    shared `httpx.Client` with a per-batch connection pool).
+  - `DataLadBackend` (`src/nemar/_datalad.py`) — optional first layer that
+    clones the dataset's DataLad sibling advertised by the NEMAR index
+    (`DatasetIndex.datalad_url`) and runs `datalad get` against the
+    BIDS-selected paths. Requires the `datalad` extra
+    (`pip install nemar-py[datalad]`). A missing optional dep, clone
+    failure, checkout failure, or `get` failure becomes a
+    `DataLadError` (`src/nemar/_errors.py`) — a subclass of `TransferError`
+    the layered wrapper catches narrowly.
+  - `LayeredBackend` (`src/nemar/_datalad.py`) — wraps `DataLadBackend`
+    as a primary over an HTTPS fallback. On `DataLadError` it writes a
+    tqdm notice and re-runs the same file set through the HTTPS adapter.
+    Every other transfer failure propagates. This is the steady-state
+    contract whenever a `datalad_url` is known: DataLad first, HTTPS
+    second.
+
+  Selection is policy-driven via `TransferOptions.backend`
+  ("auto" | "aria2" | "python" | "datalad") and resolved by
+  `select_backend` in `src/nemar/_transfer.py`:
+  - `auto` + `datalad_url` advertised → `LayeredBackend` over the
+    aria2-or-python pick.
+  - `auto` + no `datalad_url` → `Aria2Backend` if on PATH, else
+    `PythonBackend`.
+  - `datalad` + `datalad_url` advertised → `LayeredBackend` over the
+    aria2-or-python pick. The fallback to HTTPS happens **even when
+    `datalad` was requested explicitly** — the two-layer contract is
+    steady-state.
+  - `datalad` + no `datalad_url` → plain HTTPS pick, with a tqdm notice.
+  - `aria2`, `python` → opt-out from the DataLad layer; behavior
+    unchanged.
+
+  The backend choice and its runtime knobs (concurrency, stream
+  timeout, aria2 timeout) are bundled in the `TransferOptions` value
+  type (`src/nemar/_request.py`), which travels inside a
+  `DownloadRequest`. The `datalad_url` and resolved version tag are
+  threaded by `_run` (`src/nemar/_download.py`) into `select_backend`
+  *after* the index fetch, so they do not appear on `TransferOptions`
+  itself.
 - **Download request**: A `DownloadRequest` value type
   (`src/nemar/_request.py`) bundling the normalized dataset identity,
   `DataEndpoint`, requested tag, target path, BIDS query, include/exclude
@@ -68,7 +101,7 @@
   exposes `detect_case_collisions`, the pre-transfer guard against
   case-insensitive filesystem clashes that would silently overwrite data.
 - **Local dataset**: The on-disk view of a NEMAR dataset, modeled as the
-  `LocalDataset` value type (`src/nemar/_local_dataset.py`). Inspects a
+  `LocalDataset` value type (lives in `src/nemar/_download.py`). Inspects a
   target directory and asserts that any pre-existing
   `dataset_description.json` identifies the same dataset and the requested
   version, refusing to overwrite a different version's files. Construction
@@ -89,11 +122,13 @@
   `DatasetIndexError` (index payload / version resolution), `ManifestError`
   (manifest shape / content), `SelectionError` (BIDS selection, case
   collisions), `TransportError` (JSON-fetch retries exhausted, HTTP,
-  decode), `TransferError` (bytes-on-the-wire), `VerificationError` (local
-  file fails its manifest entry), `LocalTargetError` (target dir holds a
-  different dataset), and `LocalVersionMismatchError` which additionally
-  subclasses `FileExistsError` so legacy callers that catch the builtin
-  keep working. Defined in `src/nemar/_errors.py`. `ValueError` stays for
+  decode), `TransferError` (bytes-on-the-wire), `DataLadError` (DataLad /
+  git-annex transfer failure — subclass of `TransferError` so the
+  layered backend catches it narrowly for fallback), `VerificationError`
+  (local file fails its manifest entry), `LocalTargetError` (target dir
+  holds a different dataset), and `LocalVersionMismatchError` which
+  additionally subclasses `FileExistsError` so legacy callers that catch
+  the builtin keep working. Defined in `src/nemar/_errors.py`. `ValueError` stays for
   input validation at the public boundary.
 
 ## Architectural Notes

@@ -19,10 +19,12 @@ from nemar._errors import (
     DatasetIndexError,
     EndpointError,
     ManifestError,
+    TransferError,
 )
 from nemar._models import DatasetFile, VersionManifest
 from nemar._retry import RetryPolicy
 from nemar._verification import VerifyPolicy, VerifyResult
+from nemar.transfer import download_one
 
 # ---------------------------------------------------------------------------
 # NEMARClient — input validation
@@ -118,8 +120,8 @@ class TestDownloadOneEdges:
 
         transport = httpx.MockTransport(handler)
         with httpx.Client(transport=transport, follow_redirects=False) as client:
-            with pytest.raises(nemar.TransferError):
-                nemar.download_one(
+            with pytest.raises(TransferError):
+                download_one(
                     self._file(size=8),
                     tmp_path / "out.bin",
                     client=client,
@@ -135,7 +137,7 @@ class TestDownloadOneEdges:
 
         transport = httpx.MockTransport(handler)
         with httpx.Client(transport=transport, follow_redirects=False) as client:
-            result = nemar.download_one(
+            result = download_one(
                 self._file(size=100),
                 tmp_path / "out.bin",
                 client=client,
@@ -151,7 +153,7 @@ class TestDownloadOneEdges:
         target = tmp_path / "deeply" / "nested" / "path" / "out.bin"
         assert not target.parent.exists()
         with httpx.Client(transport=transport, follow_redirects=False) as client:
-            result = nemar.download_one(
+            result = download_one(
                 self._file(size=1, sha256=None),
                 target,
                 client=client,
@@ -170,7 +172,7 @@ class TestDownloadOneEdges:
         transport = httpx.MockTransport(handler)
         with httpx.Client(transport=transport, follow_redirects=False) as client:
             # File has size=1 but no hash → size check passes, hash skipped.
-            result = nemar.download_one(
+            result = download_one(
                 self._file(size=1),
                 tmp_path / "out.bin",
                 client=client,
@@ -197,7 +199,7 @@ class TestDownloadOneEdges:
 
         try:
             httpx.Client.__init__ = tracking_init  # type: ignore[method-assign]
-            result = nemar.download_one(
+            result = download_one(
                 self._file(size=1, sha256=None),
                 tmp_path / "out.bin",
                 retry=RetryPolicy.default().with_attempts(0),

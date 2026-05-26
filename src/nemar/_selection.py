@@ -14,11 +14,13 @@ diagnostics, and future callers far easier.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from difflib import get_close_matches
 
-from nemar import _bids, _glob
+from wcmatch import glob
+
+from nemar import _bids
 from nemar._errors import SelectionError
 from nemar._models import DatasetFile
 
@@ -84,13 +86,13 @@ class SelectionPlan:
             matched = tuple(
                 filename
                 for filename in filenames
-                if not _glob.is_dotfile(filename)
+                if not is_dotfile(filename)
             )
         else:
             parsed = [
                 (file.path, _bids.BidsPath.parse(file.path))
                 for file in files
-                if not _glob.is_dotfile(file.path)
+                if not is_dotfile(file.path)
             ]
             matched = tuple(
                 path for path, bids_path in parsed if bids_path.matches(query)
@@ -101,7 +103,7 @@ class SelectionPlan:
         matched_set = set(matched)
 
         if include:
-            include_matches = _glob.glob_filter(filenames, include)
+            include_matches = glob_filter(filenames, include)
             included_by_pattern = {
                 pattern: tuple(sorted(include_matches.get(pattern, ())))
                 for pattern in include
@@ -117,7 +119,7 @@ class SelectionPlan:
             included_by_pattern = {}
 
         if exclude:
-            exclude_matches = _glob.glob_filter(filenames, exclude)
+            exclude_matches = glob_filter(filenames, exclude)
             excluded_by_pattern = {
                 pattern: tuple(sorted(exclude_matches.get(pattern, ())))
                 for pattern in exclude
@@ -194,3 +196,52 @@ def _zero_match_message(
     if not hint_parts:
         return base
     return f"{base} Available: {', '.join(hint_parts)}"
+
+
+# Glob-style matching helpers. Previously lived in ``nemar._glob`` as a
+# standalone module; inlined here because :class:`SelectionPlan` is the
+# only consumer of glob_filter, and ``is_dotfile`` is also a
+# selection-time predicate (skip ``.DS_Store``, ``.git`` etc. before BIDS
+# parsing). Keeping them in this module keeps the BIDS-selection logic
+# in one file. Names are unchanged so the property test
+# (``tests/property/test_glob_properties.py``) imports them directly.
+
+
+def is_dotfile(path: str) -> bool:
+    """Return whether any path segment is dot-prefixed."""
+    return any(part.startswith(".") for part in path.split("/"))
+
+
+def glob_filter(
+    filenames: Iterable[str],
+    patterns: Iterable[str],
+) -> dict[str, set[str]]:
+    """Return filenames matched by each pattern.
+
+    Bare patterns match basenames at any depth. Every pattern is also tried as a
+    directory prefix so ``sub-001`` matches all files below ``sub-001/``.
+    """
+    names = list(filenames)
+    results: dict[str, set[str]] = {}
+
+    for original in patterns:
+        anchored = original.startswith("/")
+        pattern = original.removeprefix("/")
+        stripped = pattern.rstrip("/")
+        bare = "/" not in stripped
+
+        flags = glob.GLOBSTAR
+        if bare and not anchored:
+            flags |= glob.MATCHBASE
+
+        matches = {str(path) for path in glob.globfilter(names, pattern, flags=flags)}
+        if stripped:
+            matches |= {
+                str(path)
+                for path in glob.globfilter(
+                    names, stripped + "/**", flags=glob.GLOBSTAR
+                )
+            }
+        results[original] = matches
+
+    return results

@@ -97,6 +97,36 @@ def test_parse_dataset_index_rejects_invalid_payloads(payload) -> None:
         parse_dataset_index(payload)
 
 
+def test_parse_dataset_index_accepts_datalad_url() -> None:
+    """The optional ``datalad_url`` field travels through unchanged.
+
+    The DataLad transfer layer reads this field after index resolution to
+    decide whether a git-annex clone is reachable. Missing → None →
+    DataLad path is skipped and the HTTPS backend handles the dataset
+    on its own.
+    """
+    index = parse_dataset_index(
+        {
+            "dataset_id": "nm000132",
+            "latest": "v1.0.0",
+            "datalad_url": "https://github.com/OpenNeuroDatasets/ds000132.git",
+            "versions": [
+                {
+                    "version": "v1.0.0",
+                    "manifest_url": "/nm000132/v1.0.0/manifest.json",
+                },
+            ],
+        }
+    )
+    assert index.datalad_url == "https://github.com/OpenNeuroDatasets/ds000132.git"
+
+
+def test_parse_dataset_index_datalad_url_defaults_to_none() -> None:
+    """Existing NEMAR index payloads without ``datalad_url`` resolve to None."""
+    index = make_dataset_index()
+    assert index.datalad_url is None
+
+
 @pytest.mark.parametrize(
     ("payload", "expected"),
     [

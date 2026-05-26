@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from nemar._local_dataset import LocalDataset
+from nemar._download import LocalDataset
 
 # ---------------------------------------------------------------------------
 # from_dir: the "no compatibility check needed" cases return None.

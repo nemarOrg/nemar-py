@@ -28,7 +28,26 @@ nemar-py versions --dataset nm000132
 tags are validated against the endpoint's advertised `versions`.
 
 By default, `nemar-py` uses `aria2c` when it is available on `PATH`; otherwise
-it uses a built-in HTTP downloader.
+it uses a built-in HTTP downloader. When the NEMAR dataset index advertises a
+DataLad sibling and the optional `datalad` extra is installed, `nemar-py`
+clones it first and runs `datalad get` for the requested files; HTTPS is the
+automatic fallback when anything in the DataLad path fails.
+
+```shell
+pip install nemar-py[datalad]
+```
+
+Pick the backend explicitly if you need to:
+
+```shell
+nemar-py download --dataset nm000132 --downloader datalad   # DataLad, HTTPS fallback
+nemar-py download --dataset nm000132 --downloader aria2     # HTTPS only (aria2c)
+nemar-py download --dataset nm000132 --downloader python    # HTTPS only (built-in)
+```
+
+`--downloader datalad` still falls back to HTTPS when the dataset index does
+not advertise a DataLad URL or when DataLad fails for any reason — the
+two-layer model is the steady-state contract.
 
 ```shell
 nemar-py download --dataset nm000132 \
@@ -90,3 +109,9 @@ nemar.download(
     task="MMN",
 )
 ```
+
+## Reference implementations
+
+A snapshot of [openneuro-py](https://github.com/openneuro-py/openneuro-py) is
+kept under [`docs/reference-implementations/`](docs/reference-implementations/)
+as a design reference. It is not built, tested, or imported by `nemar-py`.

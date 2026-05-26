@@ -12,7 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from nemar import (
+from nemar._download import LocalDataset
+from nemar._endpoint import DataEndpoint
+from nemar._models import VersionManifest, parse_dataset_index
+from nemar._selection import SelectionPlan
+from nemar._verification import VerifyPolicy, assert_all_present
+from nemar.errors import (
     DatasetIndexError,
     EndpointError,
     LocalTargetError,
@@ -24,11 +29,6 @@ from nemar import (
     TransportError,
     VerificationError,
 )
-from nemar._endpoint import DataEndpoint
-from nemar._local_dataset import LocalDataset
-from nemar._models import VersionManifest, parse_dataset_index
-from nemar._selection import SelectionPlan
-from nemar._verification import VerifyPolicy, assert_all_present
 
 
 def test_endpoint_off_origin_is_a_runtime_error():

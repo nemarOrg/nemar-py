@@ -356,7 +356,9 @@ def test_download_orchestrates_manifest_selection_and_transfer(
                 outfile.write_bytes(b"x" * (file.size or 0))
 
     monkeypatch.setattr(httpx, "Client", Client)
-    monkeypatch.setattr(_download, "select_backend", lambda options: StubBackend())
+    monkeypatch.setattr(
+        _download, "select_backend", lambda options, **_kw: StubBackend()
+    )
 
     download(
         dataset="nm000132",
@@ -501,7 +503,9 @@ def test_download_accepts_index_without_metadata_url(
         def transfer(self, files, **kwargs) -> None:
             return None
 
-    monkeypatch.setattr(_download, "select_backend", lambda options: _NoopBackend())
+    monkeypatch.setattr(
+        _download, "select_backend", lambda options, **_kw: _NoopBackend()
+    )
 
     # An empty manifest is rejected downstream of the metadata branch, which
     # is what we actually want to exercise here: the orchestrator must NOT

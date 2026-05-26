@@ -31,7 +31,7 @@ from nemar._verification import VerifyPolicy
 
 DEFAULT_DATA_URL = "https://data.nemar.org/"
 DATASET_ID_RE = re.compile(r"^nm\d{6}$")
-_VALID_BACKENDS = frozenset({"auto", "aria2", "python"})
+_VALID_BACKENDS = frozenset({"auto", "aria2", "python", "datalad"})
 
 
 @dataclass(frozen=True)
@@ -177,7 +177,9 @@ def _validate(
     if not DATASET_ID_RE.fullmatch(dataset):
         raise ValueError('dataset must look like "nm000132".')
     if downloader not in _VALID_BACKENDS:
-        raise ValueError('downloader must be one of "auto", "aria2", or "python".')
+        raise ValueError(
+            'downloader must be one of "auto", "aria2", "python", or "datalad".'
+        )
     if max_retries < 0:
         raise ValueError("max_retries must be non-negative.")
     if max_concurrent_downloads < 1:

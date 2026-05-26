@@ -34,6 +34,7 @@ class DatasetIndex(BaseModel):
     dataset_id: str
     latest: str
     metadata_url: str | None = None
+    datalad_url: str | None = None
     versions: list[DatasetVersion] = Field(default_factory=list)
 
     def resolve_version(self, tag: str | None = None) -> DatasetVersion:

@@ -37,6 +37,18 @@ dependencies = [
 ]
 dynamic = ["version"]
 
+[project.optional-dependencies]
+# DataLad is the optional first-layer transfer backend. The core install
+# stays lean because the ``datalad`` wheel pulls in a heavy graph
+# (git-annex via the system package manager, rdflib, iso8601, …). Users
+# who want the layered DataLad → HTTPS transfer install with:
+#
+#     pip install nemar-py[datalad]
+#
+# Without the extra, ``--downloader datalad`` and the ``"auto"`` path
+# silently degrade to the HTTPS-only backends (with a tqdm notice).
+datalad = ["datalad>=0.19"]
+
 [project.urls]
 Homepage = "https://github.com/nemarOrg/nemar-py"
 Repository = "https://github.com/nemarOrg/nemar-py"
@@ -118,8 +130,6 @@ paths_to_mutate = [
   "src/nemar/_bids.py",
   "src/nemar/_client.py",
   "src/nemar/_endpoint.py",
-  "src/nemar/_glob.py",
-  "src/nemar/_local_dataset.py",
   "src/nemar/_models.py",
   "src/nemar/_selection.py",
   "src/nemar/_transport.py",

@@ -85,6 +85,61 @@ class TestSelectBackend:
         backend = select_backend(_make_options(backend="python"))
         assert isinstance(backend, PythonBackend)
 
+    def test_auto_with_datalad_url_returns_layered_backend(self, monkeypatch) -> None:
+        """When the index advertises a datalad_url, ``auto`` layers DataLad
+        over HTTPS.
+        """
+        from nemar._datalad import DataLadBackend, LayeredBackend
+
+        monkeypatch.setattr(_transfer.shutil, "which", lambda name: None)
+        backend = select_backend(
+            _make_options(backend="auto"),
+            datalad_url="https://github.com/OpenNeuroDatasets/ds000132.git",
+            revision="v1.0.0",
+        )
+        assert isinstance(backend, LayeredBackend)
+        assert isinstance(backend.primary, DataLadBackend)
+        assert backend.primary.datalad_url.endswith("ds000132.git")
+        assert backend.primary.revision == "v1.0.0"
+        assert isinstance(backend.fallback, PythonBackend)
+
+    def test_explicit_datalad_with_url_returns_layered_backend(
+        self, monkeypatch
+    ) -> None:
+        """Explicit ``datalad`` keeps the HTTPS fallback ('always fall back')."""
+        from nemar._datalad import DataLadBackend, LayeredBackend
+
+        monkeypatch.setattr(
+            _transfer.shutil, "which", lambda name: "/usr/bin/aria2c"
+        )
+        backend = select_backend(
+            _make_options(backend="datalad"),
+            datalad_url="https://github.com/OpenNeuroDatasets/ds000132.git",
+        )
+        assert isinstance(backend, LayeredBackend)
+        assert isinstance(backend.primary, DataLadBackend)
+        # aria2 on PATH → fallback is the aria2 backend, not python.
+        assert isinstance(backend.fallback, Aria2Backend)
+
+    def test_explicit_datalad_without_url_falls_back_to_https(
+        self, monkeypatch
+    ) -> None:
+        """``datalad`` with no advertised URL degrades to plain HTTPS with a notice."""
+        monkeypatch.setattr(_transfer.shutil, "which", lambda name: None)
+        backend = select_backend(_make_options(backend="datalad"), datalad_url=None)
+        assert isinstance(backend, PythonBackend)
+
+    def test_aria2_ignores_datalad_url(self, monkeypatch) -> None:
+        """Explicit aria2 is an opt-out from the DataLad layer."""
+        monkeypatch.setattr(
+            _transfer.shutil, "which", lambda name: "/usr/bin/aria2c"
+        )
+        backend = select_backend(
+            _make_options(backend="aria2"),
+            datalad_url="https://github.com/OpenNeuroDatasets/ds000132.git",
+        )
+        assert isinstance(backend, Aria2Backend)
+
 
 class TestAria2Checksum:
     """The static checksum helper preserves manifest-hash preference."""

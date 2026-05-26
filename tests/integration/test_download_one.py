@@ -1,4 +1,4 @@
-"""Integration tests for ``nemar.download_one`` against the local HTTPS fixture.
+"""Integration tests for ``download_one`` against the local HTTPS fixture.
 
 The unit suite covers the wiring with ``httpx.MockTransport``. These
 tests exercise the same primitive against the real ``pytest_httpserver``
@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
-import nemar
 from nemar._models import DatasetFile
 from nemar._verification import VerifyResult
+from nemar.transfer import download_one
 from tests.fixtures.factories import (
     make_blob,
     make_index,
@@ -60,7 +60,7 @@ def test_download_one_writes_correct_bytes_over_https(
     file = _publish_single_file(nemar_endpoint, blob)
 
     target = tmp_path / "ds" / "data" / "sample.bin"
-    result = nemar.download_one(file, target)
+    result = download_one(file, target)
 
     assert result is VerifyResult.OK
     assert target.read_bytes() == blob.content
@@ -86,7 +86,7 @@ def test_download_one_resumes_from_partial_via_range(
     # Pre-seed the first 1024 bytes so the resume branch fires.
     target.write_bytes(blob.content[:1024])
 
-    result = nemar.download_one(file, target)
+    result = download_one(file, target)
 
     assert result is VerifyResult.OK
     assert target.read_bytes() == blob.content

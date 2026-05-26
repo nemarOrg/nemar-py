@@ -133,27 +133,79 @@ class TransferBackend(Protocol):
         """
 
 
-def select_backend(options: TransferOptions) -> TransferBackend:
+def select_backend(
+    options: TransferOptions,
+    *,
+    datalad_url: str | None = None,
+    revision: str | None = None,
+) -> TransferBackend:
     """Resolve ``options.backend`` against the runtime environment.
+
+    Two axes drive the decision: the policy string in
+    ``options.backend`` and whether the dataset index advertised a
+    ``datalad_url`` (which the orchestrator threads in after the index
+    fetch).
 
     * ``"aria2"`` and ``aria2c`` on ``PATH`` → :class:`Aria2Backend`.
     * ``"aria2"`` and no ``aria2c`` → ``RuntimeError`` with the
       preserved message ``'The "aria2" downloader requires aria2c on
-      PATH.'``.
-    * ``"auto"`` → :class:`Aria2Backend` when ``aria2c`` is present,
-      otherwise :class:`PythonBackend` (with a one-line notice to
-      ``tqdm.write``).
-    * ``"python"`` → :class:`PythonBackend`.
+      PATH.'``. Explicit ``aria2`` is an opt-out from the DataLad
+      layer even when a ``datalad_url`` is available.
+    * ``"python"`` → :class:`PythonBackend`. Also an opt-out from the
+      DataLad layer.
+    * ``"auto"`` and ``datalad_url`` is set → :class:`LayeredBackend`
+      wrapping :class:`~nemar._datalad.DataLadBackend` over the
+      aria2-or-python pick.
+    * ``"auto"`` and no ``datalad_url`` → :class:`Aria2Backend` when
+      ``aria2c`` is present, otherwise :class:`PythonBackend` (with a
+      one-line notice to ``tqdm.write``).
+    * ``"datalad"`` and ``datalad_url`` is set →
+      :class:`LayeredBackend` over the aria2-or-python pick. Even with
+      an explicit ``datalad`` policy, every DataLad failure falls
+      back to HTTPS — that is the steady-state contract the public
+      API exposes.
+    * ``"datalad"`` and no ``datalad_url`` → degrades to the plain
+      aria2-or-python pick with a tqdm notice. There is no primary to
+      try, so the layered wrapper would be a tautology.
     """
     has_aria2 = shutil.which("aria2c") is not None
     requested = options.backend
-    if requested == "aria2" and not has_aria2:
-        raise TransferError('The "aria2" downloader requires aria2c on PATH.')
-    if requested == "aria2" or (requested == "auto" and has_aria2):
+
+    # Explicit HTTPS-only choices opt out of the DataLad layer entirely.
+    if requested == "aria2":
+        if not has_aria2:
+            raise TransferError(
+                'The "aria2" downloader requires aria2c on PATH.'
+            )
         return Aria2Backend()
-    if requested == "auto":
+    if requested == "python":
+        return PythonBackend()
+
+    # From here ``requested`` is "auto" or "datalad". The HTTPS pick is
+    # both the standalone result when no DataLad URL is known and the
+    # fallback inside the layered wrapper when one is.
+    https = Aria2Backend() if has_aria2 else PythonBackend()
+
+    if datalad_url is not None:
+        # Import lazily so callers who never select the DataLad path do not
+        # import the optional ``datalad`` package transitively through
+        # this module. The dependency direction stays one-way: ``_datalad``
+        # imports from ``_transfer``, not vice versa.
+        from nemar._datalad import DataLadBackend, LayeredBackend
+
+        return LayeredBackend(
+            DataLadBackend(datalad_url=datalad_url, revision=revision),
+            https,
+        )
+
+    if requested == "datalad":
+        tqdm.write(
+            "DataLad backend requested but the dataset index did not advertise "
+            "a datalad_url; using the HTTPS downloader."
+        )
+    elif not has_aria2:
         tqdm.write("aria2c was not found on PATH; using the Python downloader.")
-    return PythonBackend()
+    return https
 
 
 class Aria2Backend:
@@ -433,7 +485,7 @@ def download_one(
         must share the endpoint's scheme + netloc; otherwise
         :class:`~nemar._errors.EndpointError` is raised before any
         bytes are fetched. Files produced by
-        :meth:`~nemar.VersionManifest.parse` are already origin-scoped;
+        :meth:`~nemar.models.VersionManifest.parse` are already origin-scoped;
         passing ``endpoint`` here is the right move for callers that
         hand-build a :class:`DatasetFile` from untrusted input.
     stream_timeout
@@ -580,6 +632,17 @@ def _transfer_one_attempt(
         "user-agent": f"nemar-py/{__version__}",
     }
     mode = "wb"
+    # Defensive against the layered DataLad → HTTPS fallback: a partial
+    # DataLad attempt can leave a git-annex symlink (often broken,
+    # pointing into ``.git/annex/objects/...``) at the manifest path.
+    # Without this unlink, ``open(symlink, "wb")`` below would follow
+    # the symlink and write through to the annex object path, corrupting
+    # the git-annex working tree. ``Path.exists()`` returns False on a
+    # broken symlink, so the size-based branches below would not catch
+    # this case on their own. Run unconditionally on any symlink, broken
+    # or live — HTTPS authority is the manifest, not the symlink target.
+    if outfile.is_symlink():
+        outfile.unlink()
     # ``force_fresh`` discards any local partial bytes before sending
     # an unconditional GET. Used when the previous attempt got a 416 and
     # the local partial cannot represent a valid suffix of the current

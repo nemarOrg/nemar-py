@@ -198,7 +198,12 @@ def download_cli(
         str,
         typer.Option(
             "--downloader",
-            help="Transfer backend: auto, aria2, or python.",
+            help=(
+                "Transfer backend: auto, aria2, python, or datalad. "
+                "auto and datalad layer DataLad over HTTPS when the dataset "
+                "index advertises a datalad_url; aria2 and python opt out of "
+                "the DataLad layer."
+            ),
         ),
     ] = "auto",
     verify_hash: Annotated[

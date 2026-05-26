@@ -7,7 +7,7 @@ import string
 from hypothesis import given
 from hypothesis import strategies as st
 
-from nemar._glob import glob_filter, is_dotfile
+from nemar._selection import glob_filter, is_dotfile
 
 name_chars = string.ascii_lowercase + string.digits + "-_"
 filenames = st.lists(
