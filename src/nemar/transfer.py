@@ -1,13 +1,20 @@
-"""Single-file transfer primitive — public submodule.
+"""Transfer primitives — public submodule.
 
-Re-export of :func:`nemar._transfer.download_one`, the smallest useful
-transfer operation. Callers reach for it when they want to fetch a
-single :class:`~nemar.models.VersionManifest` entry without the
-metadata orchestrator (e.g., resuming one file after an interrupted
-batch). Most users want :func:`nemar.download` instead, which owns the
+Re-exports of the two byte-on-the-wire primitives:
+
+* :func:`download_one` — fetch a single :class:`DatasetFile` to a
+  given target path. The smallest useful transfer operation.
+* :func:`download_files` — bulk variant for a sequence of
+  :class:`DatasetFile` entries. Skips the full
+  :func:`nemar.download` orchestrator (no dataset index, no BIDS
+  query) so external clients (eegdash, custom selectors) can compose
+  their own selection logic on top of a parsed manifest.
+
+Most end users want :func:`nemar.download` instead, which owns the
 full index → manifest → BIDS-selection → transfer flow.
 """
 
 from __future__ import annotations
 
+from nemar._transfer import download_files as download_files
 from nemar._transfer import download_one as download_one

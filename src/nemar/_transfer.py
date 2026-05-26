@@ -72,6 +72,8 @@ from nemar._verification import (
     VerifyPolicy,
     VerifyResult,
     _describe_failure,
+    assert_all_present,
+    partition_pending,
 )
 from nemar._verification import check as _verify_check
 
@@ -534,6 +536,118 @@ def download_one(
         progress.close()
         if owns_client:
             client.close()
+
+
+def download_files(
+    files: Sequence[DatasetFile],
+    target_dir: Path | str,
+    *,
+    options: TransferOptions | None = None,
+    verify: VerifyPolicy | None = None,
+    retry: RetryPolicy | None = None,
+    endpoint: DataEndpoint | None = None,
+) -> None:
+    """Download a list of :class:`DatasetFile` entries to ``target_dir``.
+
+    The bulk variant of :func:`download_one`. Callers that already have
+    their own selection logic (e.g., eegdash composing a custom file
+    list from a parsed :class:`~nemar.models.VersionManifest`) reach for
+    this primitive instead of the full :func:`nemar.download`
+    orchestrator: there is no dataset index, no metadata fetch, no BIDS
+    query — only the bytes-on-the-wire phase plus the verify gates.
+
+    The same three-step pipeline the orchestrator runs after manifest
+    parsing fires here too: pre-transfer
+    :func:`~nemar._verification.partition_pending` (size-only filter,
+    skips already-complete files), the selected
+    :class:`TransferBackend`, and post-transfer
+    :func:`~nemar._verification.assert_all_present` (full size + hash
+    sweep over every file in ``files``).
+
+    Parameters
+    ----------
+    files
+        Sequence of :class:`DatasetFile` entries to transfer. An empty
+        sequence is a no-op (``target_dir`` is still created so callers
+        can chain follow-ups safely).
+    target_dir
+        Destination directory. Created if it does not exist. ``str`` and
+        :class:`~pathlib.Path` are both accepted.
+    options
+        Transfer-backend knobs (concurrency, stream timeout, backend
+        policy). Defaults to a python-backend bundle with 16-way
+        concurrency. The DataLad layer is not exercised here — bulk
+        file lists do not carry a ``datalad_url`` — so a
+        ``backend="datalad"`` value degrades to plain HTTPS with a
+        ``tqdm`` notice.
+    verify
+        Verification policy applied by both the pre-transfer partition
+        and the post-transfer sweep. Defaults to size + hash.
+    retry
+        Per-file retry policy. Defaults to :meth:`RetryPolicy.default`.
+    endpoint
+        Optional :class:`~nemar.models.DataEndpoint` used to enforce
+        origin scoping. When supplied, every file's ``url`` must share
+        the endpoint's scheme + netloc; otherwise
+        :class:`~nemar._errors.EndpointError` is raised before any
+        bytes move. When ``None`` (default) no origin check runs —
+        matches :func:`download_one`'s default and trusts the caller's
+        own scoping (typically inherited from
+        :meth:`~nemar.models.VersionManifest.parse`).
+
+    Raises
+    ------
+    EndpointError
+        When ``endpoint`` is supplied and any file's ``url`` is
+        off-origin.
+    TransferError
+        On irrecoverable transport failure for any file.
+    VerificationError
+        When the post-transfer sweep finds a file on disk that does not
+        satisfy its manifest entry (size or hash mismatch, error
+        sentinel, missing file after a swallowed failure).
+
+    """
+    target = Path(target_dir).expanduser().resolve()
+    target.mkdir(parents=True, exist_ok=True)
+    if options is None:
+        options = TransferOptions(
+            backend="python",
+            max_concurrent_downloads=16,
+            stream_timeout=60.0,
+            aria2_timeout=None,
+        )
+    if verify is None:
+        verify = VerifyPolicy()
+    if retry is None:
+        retry = RetryPolicy.default()
+    if endpoint is not None:
+        # Check *all* URLs before any bytes move. Otherwise the first
+        # files in the list could land on disk before a later off-origin
+        # one is rejected, leaving partial state for callers to clean up.
+        for file in files:
+            endpoint.assert_within(file.url)
+    if not files:
+        return
+    # Bulk file lists do not carry a DataLad URL, so the layered backend
+    # never applies here. ``select_backend`` with ``datalad_url=None``
+    # returns a plain HTTPS adapter (the aria2-or-python pick).
+    backend = select_backend(options, datalad_url=None)
+    pending = partition_pending(
+        list(files),
+        target_dir=target,
+        policy=verify,
+        pre_transfer=True,
+    )
+    if pending:
+        backend.transfer(
+            pending,
+            target_dir=target,
+            options=options,
+            verify=verify,
+            retry=retry,
+        )
+    assert_all_present(list(files), target_dir=target, policy=verify)
 
 
 def _build_oneshot_client(stream_timeout: float) -> httpx.Client:
