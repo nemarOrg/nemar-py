@@ -190,6 +190,78 @@ def test_root_sidecars_sweep_skips_subdirectory_jsons() -> None:
     assert "sub-002/eeg/sub-002_task-MMN_eeg.set" not in selected_paths
 
 
+def test_subject_query_does_not_match_derivatives_by_default() -> None:
+    """A ``subject="02"`` query with no explicit scope stays within raw.
+
+    Regression guard against the nm000133 over-fetch: previously, a
+    subject query matched ``sub-02`` anywhere — including
+    ``derivatives/<pipeline>/sub-02/...`` — pulling 260+ MB of epoched
+    derivative data the caller didn't ask for. The fix defaults
+    ``BidsQuery.from_filters(scope=None)`` to ``scope="raw"``.
+
+    Callers who want derivatives still get them by passing
+    ``scope="derivatives"`` (or ``["raw","derivatives"]``).
+    """
+    files = _files(
+        [
+            "dataset_description.json",
+            "sub-02/ses-01/eeg/sub-02_ses-01_task-images_eeg.bdf",
+            "sub-02/ses-01/eeg/sub-02_ses-01_task-images_events.tsv",
+            "derivatives/epoched/sub-02/ses-01/eeg/sub-02_ses-01_task-images_epo.fif",
+        ]
+    )
+
+    plan = SelectionPlan.build(
+        files,
+        query=_bids.BidsQuery.from_filters(subject="02"),
+        include=[],
+        exclude=[],
+    )
+
+    selected = {f.path for f in plan.final}
+    assert "sub-02/ses-01/eeg/sub-02_ses-01_task-images_eeg.bdf" in selected
+    assert "sub-02/ses-01/eeg/sub-02_ses-01_task-images_events.tsv" in selected
+    # The over-fetch is gone — derivatives stay opt-in.
+    assert (
+        "derivatives/epoched/sub-02/ses-01/eeg/sub-02_ses-01_task-images_epo.fif"
+        not in selected
+    )
+
+
+def test_explicit_derivatives_scope_still_works() -> None:
+    """Callers who opt into derivatives get them.
+
+    Confirms the default-to-raw fix doesn't break the documented
+    workflow ``scope="derivatives", pipeline=...``.
+    """
+    files = _files(
+        [
+            "sub-02/ses-01/eeg/sub-02_ses-01_task-images_eeg.bdf",
+            "derivatives/epoched/sub-02/ses-01/eeg/sub-02_ses-01_task-images_epo.fif",
+        ]
+    )
+
+    plan = SelectionPlan.build(
+        files,
+        query=_bids.BidsQuery.from_filters(
+            subject="02",
+            scope="derivatives",
+            pipeline="epoched",
+        ),
+        include=[],
+        exclude=[],
+    )
+
+    selected = {f.path for f in plan.final}
+    # Only the derivative landed — raw stays out because scope was
+    # narrowed to derivatives only.
+    assert (
+        "derivatives/epoched/sub-02/ses-01/eeg/sub-02_ses-01_task-images_epo.fif"
+        in selected
+    )
+    assert "sub-02/ses-01/eeg/sub-02_ses-01_task-images_eeg.bdf" not in selected
+
+
 def test_excluded_by_pattern_records_paths_but_keeps_essentials() -> None:
     """Excluding essentials by pattern is overridden by the essential carve-out."""
     files = _files(

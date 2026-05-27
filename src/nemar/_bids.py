@@ -113,6 +113,17 @@ class BidsQuery:
         _add_entity_filter(entities, "run", run)
         _add_entity_filter(entities, "acq", acquisition)
 
+        # Default to ``raw`` scope when none is supplied. Without this,
+        # a subject/session query would also match files under
+        # ``derivatives/<pipeline>/sub-X/...`` because the BIDS subject
+        # entity appears in both the raw tree and any subject-scoped
+        # derivative — surprising over-fetch (we've seen 260 MB of
+        # epoched derivatives sneak in on a sub-02 query against
+        # nm000133). The explicit choices are unchanged: callers who
+        # want a derivative pipeline, stimuli, sourcedata, or code pass
+        # ``scope=`` directly (e.g. ``scope="derivatives", pipeline=...``).
+        if scope is None:
+            scope = "raw"
         return cls(
             entities=entities,
             datatypes=_normalize_values(datatype),

@@ -210,7 +210,15 @@ def test_bids_query_matches_semantic_filters(path, filters, expected) -> None:
 @pytest.mark.parametrize(
     ("filters", "expected"),
     [
-        pytest.param({}, "<empty>", id="empty-query"),
+        # ``from_filters(**{})`` defaults to ``scope=raw`` per the
+        # post-nm000133 audit: subject/session queries previously
+        # matched derivatives because no scope filter was applied.
+        pytest.param({}, "scope=raw", id="default-scope-raw"),
+        pytest.param(
+            {"scope": ["raw", "derivatives"]},
+            "scope=raw,derivatives",
+            id="explicit-multi-scope",
+        ),
         pytest.param(
             {
                 "subject": ["sub-001", "002"],
