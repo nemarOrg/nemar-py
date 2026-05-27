@@ -78,6 +78,118 @@ def test_essential_kept_never_contains_absent_essentials() -> None:
     assert "dataset_description.json" in plan.essential_kept
 
 
+def test_root_sidecars_auto_included_when_bids_query_active() -> None:
+    """A BIDS query auto-pulls root-level ``*.json`` / ``*.tsv`` sidecars.
+
+    Real NEMAR datasets keep inherited BIDS sidecars at the dataset root
+    (``task-typing_events.json``, ``space-*_coordsystem.json``, etc.).
+    Without this auto-include, a ``subject=...`` query downloads the
+    recording and its in-directory sidecars but leaves the inherited
+    root sidecars behind — an analyst then can't decode event columns
+    or coordinate systems. Pinning the contract here documents the
+    Option-A trade-off: small over-fetch (root JSON/TSV are tiny), no
+    BIDS-inheritance walk.
+    """
+    files = _files(
+        [
+            "dataset_description.json",
+            "participants.tsv",
+            "task-typing_events.json",  # inherited sidecar (applies)
+            "space-leftForearm_coordsystem.json",  # inherited sidecar (applies)
+            "task-other_events.json",  # inherited sidecar (does NOT apply)
+            "sub-001/eeg/sub-001_task-MMN_eeg.set",
+            "sub-002/eeg/sub-002_task-MMN_eeg.set",
+        ]
+    )
+
+    plan = SelectionPlan.build(
+        files,
+        query=_bids.BidsQuery.from_filters(subject="001"),
+        include=[],
+        exclude=[],
+    )
+
+    selected_paths = {f.path for f in plan.final}
+    # The recording lands.
+    assert "sub-001/eeg/sub-001_task-MMN_eeg.set" in selected_paths
+    # The unrelated subject does NOT land.
+    assert "sub-002/eeg/sub-002_task-MMN_eeg.set" not in selected_paths
+    # Root sidecars land — including the over-fetched ``task-other_events.json``
+    # that doesn't strictly apply (the Option-A trade-off vs Option-B).
+    assert "task-typing_events.json" in selected_paths
+    assert "space-leftForearm_coordsystem.json" in selected_paths
+    assert "task-other_events.json" in selected_paths
+    # Existing essentials still land.
+    assert "dataset_description.json" in selected_paths
+    assert "participants.tsv" in selected_paths
+
+
+def test_root_sidecars_not_auto_included_without_bids_query() -> None:
+    """No BIDS query → root sidecar sweep stays off.
+
+    Without a BIDS query the user is asking for the whole manifest (or
+    using ``include`` patterns for precise selection); auto-including
+    root JSON/TSV would either be redundant (everything is selected
+    anyway) or surprising (path-include is meant to be precise). The
+    existing ``ESSENTIAL_BIDS_FILES`` carve-out still applies.
+    """
+    files = _files(
+        [
+            "dataset_description.json",
+            "task-typing_events.json",
+            "sub-001/eeg/sub-001_task-MMN_eeg.set",
+        ]
+    )
+
+    plan = SelectionPlan.build(
+        files,
+        query=_bids.BidsQuery(),  # empty
+        include=["sub-001/**"],
+        exclude=[],
+    )
+
+    selected_paths = {f.path for f in plan.final}
+    # Recording landed via the path include.
+    assert "sub-001/eeg/sub-001_task-MMN_eeg.set" in selected_paths
+    # Essential still kept.
+    assert "dataset_description.json" in selected_paths
+    # Root sidecar NOT swept (no BIDS query active).
+    assert "task-typing_events.json" not in selected_paths
+
+
+def test_root_sidecars_sweep_skips_subdirectory_jsons() -> None:
+    """The sweep is root-only: deep JSON/TSV files do not enter the
+    essential set by virtue of having a sidecar suffix.
+
+    Otherwise a BIDS query would unintentionally pull every JSON in
+    every subject's directory across the dataset, defeating the point
+    of the query.
+    """
+    files = _files(
+        [
+            "dataset_description.json",
+            "sub-001/eeg/sub-001_task-MMN_eeg.json",  # not root
+            "sub-001/eeg/sub-001_task-MMN_eeg.set",
+            "sub-002/eeg/sub-002_task-MMN_eeg.json",  # not root, unrelated subject
+            "sub-002/eeg/sub-002_task-MMN_eeg.set",
+        ]
+    )
+
+    plan = SelectionPlan.build(
+        files,
+        query=_bids.BidsQuery.from_filters(subject="001"),
+        include=[],
+        exclude=[],
+    )
+
+    selected_paths = {f.path for f in plan.final}
+    assert "sub-001/eeg/sub-001_task-MMN_eeg.set" in selected_paths
+    assert "sub-001/eeg/sub-001_task-MMN_eeg.json" in selected_paths
+    # The other subject's sidecar is NOT swept — the rule is root-only.
+    assert "sub-002/eeg/sub-002_task-MMN_eeg.json" not in selected_paths
+    assert "sub-002/eeg/sub-002_task-MMN_eeg.set" not in selected_paths
+
+
 def test_excluded_by_pattern_records_paths_but_keeps_essentials() -> None:
     """Excluding essentials by pattern is overridden by the essential carve-out."""
     files = _files(

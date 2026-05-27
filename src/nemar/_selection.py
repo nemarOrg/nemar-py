@@ -134,6 +134,27 @@ class SelectionPlan:
             excluded_paths = set()
 
         essential = ESSENTIAL_BIDS_FILES & set(filenames)
+        # Root-level sidecar sweep ("Option A"): when a BIDS query is
+        # active, any ``*.json`` / ``*.tsv`` at the dataset root joins
+        # the essential set. Real NEMAR datasets keep BIDS-inherited
+        # sidecars at the root (``task-<label>_events.json``,
+        # ``space-*_coordsystem.json``, …) — without this sweep a
+        # ``subject=...`` query would pull the recording and its
+        # in-directory sidecars but miss the metadata that lets a
+        # downstream tool decode event columns or coordinate systems.
+        # The sweep over-fetches the small handful of root sidecars
+        # that don't strictly apply (e.g. ``task-other_events.json``
+        # for a recording we did not select); the alternative — a full
+        # BIDS-inheritance walk that matches by entity overlap — is an
+        # order of magnitude more code without a meaningful payoff on
+        # the dataset shapes NEMAR actually publishes.
+        if not query.is_empty():
+            essential = essential | {
+                filename
+                for filename in filenames
+                if "/" not in filename
+                and (filename.endswith(".json") or filename.endswith(".tsv"))
+            }
         selected = (matched_set - excluded_paths) | essential
         essential_kept = tuple(sorted(essential))
 
