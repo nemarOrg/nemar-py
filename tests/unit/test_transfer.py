@@ -19,6 +19,7 @@ from pathlib import Path
 
 import httpx
 
+from nemar._datalad import DataLadBackend, LayeredBackend
 from nemar._models import DatasetFile
 from nemar._request import TransferOptions
 from nemar._retry import RetryPolicy
@@ -57,8 +58,6 @@ class TestSelectBackend:
         """When the index advertises a datalad_url, ``auto`` layers
         DataLad over HTTPS.
         """
-        from nemar._datalad import DataLadBackend, LayeredBackend
-
         backend = select_backend(
             _make_options(backend="auto"),
             datalad_url="https://github.com/OpenNeuroDatasets/ds000132.git",
@@ -72,8 +71,6 @@ class TestSelectBackend:
 
     def test_explicit_datalad_with_url_returns_layered_backend(self) -> None:
         """Explicit ``datalad`` keeps the HTTPS fallback ('always fall back')."""
-        from nemar._datalad import DataLadBackend, LayeredBackend
-
         backend = select_backend(
             _make_options(backend="datalad"),
             datalad_url="https://github.com/OpenNeuroDatasets/ds000132.git",

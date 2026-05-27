@@ -6,10 +6,17 @@ from pathlib import Path
 import httpx
 import pytest
 
-from nemar import _bids, _download
+from nemar import _bids, _download, fetch_dataset_index
 from nemar._download import download
 from nemar._models import DatasetFile
+from nemar._request import DownloadRequest
 from nemar._selection import SelectionPlan
+from nemar._verification import (
+    VerifyPolicy,
+    VerifyResult,
+    assert_all_present,
+    check,
+)
 from tests.fixtures.factories import make_dataset_file, make_index
 
 
@@ -393,8 +400,6 @@ def test_download_orchestrates_manifest_selection_and_transfer(
 )
 def test_download_request_validates_options(kwargs, message) -> None:
     """``DownloadRequest.from_kwargs`` rejects unsafe or unsupported values."""
-    from nemar._request import DownloadRequest
-
     valid = {
         "dataset": "nm000132",
         "downloader": "python",
@@ -418,8 +423,6 @@ def test_download_request_validates_options(kwargs, message) -> None:
 )
 def test_fetch_dataset_index_validates_options(kwargs, message) -> None:
     """``fetch_dataset_index`` rejects unsafe or unsupported values."""
-    from nemar import fetch_dataset_index
-
     valid = {
         "dataset": "nm000132",
         "max_retries": 1,
@@ -631,8 +634,6 @@ def test_local_file_satisfies_manifest(
     tmp_path: Path, file, content, verify_hash, verify_size, expected
 ) -> None:
     """Local files are reused only when selected manifest checks pass."""
-    from nemar._verification import VerifyPolicy, VerifyResult, check
-
     if content is not None:
         (tmp_path / file.path).write_bytes(content)
 
@@ -685,8 +686,6 @@ def test_verify_manifest_file_errors(
     tmp_path: Path, file, content, verify_hash, verify_size, message
 ) -> None:
     """Verifier reports missing, size, and checksum mismatches."""
-    from nemar._verification import VerifyPolicy, assert_all_present
-
     outfile = tmp_path / file.path
     if content is not None:
         outfile.write_bytes(content)

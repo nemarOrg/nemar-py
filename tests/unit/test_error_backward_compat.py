@@ -10,12 +10,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import httpx
 import pytest
 
+from nemar._bids import BidsQuery
 from nemar._download import LocalDataset
 from nemar._endpoint import DataEndpoint
-from nemar._models import VersionManifest, parse_dataset_index
+from nemar._models import DatasetFile, VersionManifest, parse_dataset_index
+from nemar._retry import RetryPolicy
 from nemar._selection import SelectionPlan
+from nemar._transport import fetch_json
 from nemar._verification import VerifyPolicy, assert_all_present
 from nemar.errors import (
     DatasetIndexError,
@@ -84,9 +88,6 @@ def test_dataset_index_resolve_version_runtime_error():
 
 def test_selection_zero_match_is_a_runtime_error():
     """SelectionPlan.build raises a RuntimeError (subclass) on zero match."""
-    from nemar._bids import BidsQuery
-    from nemar._models import DatasetFile
-
     files = [
         DatasetFile(
             path="sub-001/eeg/sub-001_task-MMN_eeg.set",
@@ -146,8 +147,6 @@ def test_local_doi_mismatch_is_a_runtime_error(tmp_path: Path):
 
 def test_verification_failure_is_a_runtime_error(tmp_path: Path):
     """assert_all_present raises a RuntimeError (subclass) on missing files."""
-    from nemar._models import DatasetFile
-
     file = DatasetFile(
         path="missing.txt",
         url="https://data.nemar.org/missing.txt",
@@ -164,10 +163,6 @@ def test_verification_failure_is_a_runtime_error(tmp_path: Path):
 
 def test_transport_invalid_json_is_a_runtime_error():
     """fetch_json raises a RuntimeError (subclass) on non-JSON response."""
-    import httpx
-
-    from nemar._retry import RetryPolicy
-    from nemar._transport import fetch_json
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=b"not json at all", request=request)

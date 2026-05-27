@@ -6,10 +6,13 @@ import hashlib
 
 import httpx
 import pytest
+from tqdm.auto import tqdm
 
 import nemar
 from nemar import _transfer
 from nemar._models import DatasetFile
+from nemar._retry import RetryPolicy
+from nemar._verification import VerifyPolicy
 from tests.fixtures.factories import (
     make_blob,
     make_index,
@@ -88,8 +91,6 @@ def test_progress_does_not_overshoot_when_server_ignores_range(
     partial bytes), because ``progress.update(local_size)`` ran before the
     request and was never subtracted on the 206→200 downgrade.
     """
-    from tqdm.auto import tqdm as _tqdm
-
     data = b"hello nemar progress bar"
     partial_size = 8  # pre-seeded bytes
 
@@ -122,7 +123,7 @@ def test_progress_does_not_overshoot_when_server_ignores_range(
     # Track updates via a mock progress object.
     total_updates: list[int] = []
 
-    class TrackingProgress(_tqdm):
+    class TrackingProgress(tqdm):
         def update(self, n=1):
             total_updates.append(n)
             return super().update(n)
@@ -236,8 +237,6 @@ def test_http_416_on_resume_retries_fresh(tmp_path) -> None:
     unconditional GET on the next attempt, succeeding without infinite
     loops.
     """
-    from tqdm.auto import tqdm as _tqdm
-
     data = b"fresh download contents"
     partial_size = 8
 
@@ -274,12 +273,9 @@ def test_http_416_on_resume_retries_fresh(tmp_path) -> None:
 
     httpx.stream = patched_stream
     try:
-        with _tqdm(
+        with tqdm(
             total=len(data), desc="test", unit="B", unit_scale=True
         ) as progress:
-            from nemar._retry import RetryPolicy
-            from nemar._verification import VerifyPolicy
-
             _transfer._transfer_one_with_python(
                 file,
                 target,

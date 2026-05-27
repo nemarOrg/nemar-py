@@ -2,6 +2,25 @@
 
 ## Domain Language
 
+- **NEMAR S3 layout**: NEMAR's file delivery rides on a single public S3
+  bucket. The layout was verified end-to-end against the official
+  DataLad clones of four representative datasets (nm000132, nm000104,
+  on005505, nm000133) and surfaced as code in `src/nemar/_s3.py` /
+  `src/nemar/s3.py`:
+  - Bucket: `nemar` (region `us-east-2`)
+  - Public host: `https://nemar.s3.us-east-2.amazonaws.com`
+  - Per-dataset prefix: `<dataset>/objects/`
+  - Object key: git-annex content key
+    (e.g. `SHA256E-s<size>--<hex>.<ext>` or `MD5E-s<size>--<hex>.<ext>`)
+  The bucket is publicly readable: an unsigned `GET` against the
+  canonical URL returns 200 OK. The pre-signed URLs the
+  `data.nemar.org` manifest serves (with `X-Amz-Expires=3600` and
+  `response-content-disposition`) are a convenience layer on top of the
+  same canonical objects, not a separate access path. The constants
+  `NEMAR_S3_HOST` / `NEMAR_S3_BUCKET` / `NEMAR_S3_REGION` and the
+  helper `s3_object_url(dataset, annex_key)` are the public seam for
+  callers (e.g. eegdash) that hold an annex key from a DataLad clone
+  and want to skip the manifest fetch.
 - **NEMAR data endpoint**: The public HTTPS origin at `https://data.nemar.org/`.
   This is the canonical entry point for downloads in this client. Modeled
   internally as the `DataEndpoint` value type (`src/nemar/_endpoint.py`),

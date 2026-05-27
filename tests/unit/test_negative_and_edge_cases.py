@@ -20,7 +20,7 @@ from nemar._errors import (
     ManifestError,
     TransferError,
 )
-from nemar._models import DatasetFile, VersionManifest
+from nemar._models import DatasetFile, VersionManifest, parse_dataset_index
 from nemar._retry import RetryPolicy
 from nemar._verification import VerifyPolicy, VerifyResult
 from nemar.transfer import download_one
@@ -318,8 +318,6 @@ class TestDataEndpointEdges:
 
 class TestDatasetIndexEdges:
     def _index(self):
-        from nemar._models import parse_dataset_index
-
         return parse_dataset_index(
             {
                 "dataset_id": "nm000132",

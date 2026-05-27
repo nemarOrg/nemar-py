@@ -22,6 +22,7 @@ from typing import Any
 
 import httpx
 
+from nemar import __version__
 from nemar._endpoint import DataEndpoint
 from nemar._errors import DatasetIndexError, ManifestError
 from nemar._models import (
@@ -58,10 +59,6 @@ class NEMARClient:
     ) -> None:
         if max_retries < 0:
             raise ValueError("max_retries must be non-negative.")
-        # Lazy import dodges a circular import between ``nemar`` (which
-        # re-exports NEMARClient) and ``importlib.metadata``.
-        from nemar import __version__
-
         self._endpoint = DataEndpoint.from_url(data_url)
         self._metadata_timeout = metadata_timeout
         self._max_retries = max_retries

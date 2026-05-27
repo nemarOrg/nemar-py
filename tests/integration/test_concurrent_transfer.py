@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pytest_httpserver.httpserver import HandlerType
 from werkzeug.wrappers import Request, Response
 
 import nemar
@@ -34,8 +35,6 @@ def test_all_failures_are_reported(nemar_endpoint, target_dir):
     )
 
     # All three respond 500 every time.
-    from pytest_httpserver.httpserver import HandlerType
-
     for i in range(3):
 
         def handler(request: Request) -> Response:

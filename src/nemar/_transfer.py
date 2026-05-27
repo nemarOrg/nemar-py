@@ -42,6 +42,7 @@ import httpx
 from tqdm.auto import tqdm
 
 from nemar import __version__
+from nemar._datalad import DataLadBackend, LayeredBackend
 from nemar._endpoint import DataEndpoint
 from nemar._errors import TransferError, VerificationError
 from nemar._models import DatasetFile
@@ -144,12 +145,6 @@ def select_backend(
     https = PythonBackend()
 
     if datalad_url is not None:
-        # Import lazily so callers who never select the DataLad path do not
-        # import the optional ``datalad`` package transitively through
-        # this module. The dependency direction stays one-way: ``_datalad``
-        # imports from ``_transfer``, not vice versa.
-        from nemar._datalad import DataLadBackend, LayeredBackend
-
         return LayeredBackend(
             DataLadBackend(datalad_url=datalad_url, revision=revision),
             https,

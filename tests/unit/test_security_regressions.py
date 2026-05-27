@@ -18,14 +18,22 @@ the fixes (TDD); each one should fail until its corresponding fix lands.
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
+import nemar._client as client_mod
+from nemar._client import NEMARClient
 from nemar._endpoint import DataEndpoint
 from nemar._errors import (
     EndpointError,
     ManifestError,
 )
-from nemar._models import VersionManifest
+from nemar._models import DatasetFile, DatasetIndex, DatasetVersion, VersionManifest
+from nemar._request import TransferOptions
+from nemar._retry import RetryPolicy
+from nemar._transfer import PythonBackend
+from nemar._verification import VerifyPolicy
+from nemar.transfer import download_one
 
 
 class TestManifestPathControlCharsRejected:
@@ -87,9 +95,6 @@ class TestDownloadOneAcceptsEndpoint:
     def test_download_one_rejects_off_origin_url_when_endpoint_passed(
         self, tmp_path
     ) -> None:
-        from nemar._models import DatasetFile
-        from nemar.transfer import download_one
-
         endpoint = DataEndpoint.from_url("https://data.nemar.org/")
         evil_file = DatasetFile(
             path="legit.bin",
@@ -116,14 +121,6 @@ class TestPythonBackendHonorsCustomPolicies:
         """A custom RetryPolicy with 0 retries must result in exactly one
         attempt per file. The previous behavior was correct for max_attempts
         but the test pins that the *value* round-trips, not just the count."""
-        import httpx
-
-        from nemar._models import DatasetFile
-        from nemar._request import TransferOptions
-        from nemar._retry import RetryPolicy
-        from nemar._transfer import PythonBackend
-        from nemar._verification import VerifyPolicy
-
         attempts = {"count": 0}
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -181,9 +178,6 @@ class TestNEMARClientFetchManifestNarrowCatch:
         """If something raises a bare RuntimeError (not a TransportError),
         fetch_manifest must NOT catch and remap it to ManifestError.
         """
-        from nemar._client import NEMARClient
-        from nemar._models import DatasetIndex, DatasetVersion
-
         client = NEMARClient(data_url="https://data.nemar.org/")
         try:
             index = DatasetIndex(
@@ -204,8 +198,6 @@ class TestNEMARClientFetchManifestNarrowCatch:
             # the broad catch swallows it.
             def _raise(*_args, **_kwargs):
                 raise sentinel
-
-            import nemar._client as client_mod
 
             original = client_mod.fetch_json
             client_mod.fetch_json = _raise  # type: ignore[assignment]

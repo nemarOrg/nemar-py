@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from werkzeug.wrappers import Request, Response
 
@@ -90,8 +92,6 @@ def test_fetch_dataset_index_rejects_off_origin_redirect(nemar_endpoint) -> None
     The downloader's origin check must catch the netloc divergence and
     raise instead.
     """
-    import json as _json
-
     parsed_base = nemar_endpoint.base_url.rstrip("/")
     # Re-target the same fixture server through its IP literal so TLS
     # handshakes succeed but the final URL's netloc differs from the
@@ -112,7 +112,7 @@ def test_fetch_dataset_index_rejects_off_origin_redirect(nemar_endpoint) -> None
                 headers={"Location": f"{redirect_target}/nm000132/"},
             )
         return Response(
-            _json.dumps(make_index(dataset="nm000132")),
+            json.dumps(make_index(dataset="nm000132")),
             status=200,
             content_type="application/json",
         )

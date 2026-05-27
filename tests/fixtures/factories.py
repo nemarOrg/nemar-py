@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -146,8 +147,6 @@ def make_blob(
     size_bytes: int,
 ) -> FakeBlob:
     """Build a deterministic byte blob of ``size_bytes``."""
-    import random
-
     rng = random.Random(seed)
     content = bytes(rng.randrange(256) for _ in range(size_bytes))
     return FakeBlob(

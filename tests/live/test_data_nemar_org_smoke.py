@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import os
 
+import httpx
 import pytest
 
 import nemar
+from nemar.s3 import s3_object_url
 
 pytestmark = pytest.mark.live
 
@@ -61,6 +63,40 @@ def test_on_prefixed_dataset_index_against_live_endpoint() -> None:
     assert idx.dataset_id == "on005505"
     assert idx.latest
     assert idx.versions
+
+
+@pytest.mark.skipif(
+    os.environ.get("NEMAR_LIVE_TEST") != "1",
+    reason=SKIP_REASON,
+)
+def test_s3_canonical_url_serves_an_object() -> None:
+    """An unsigned ``GET`` against ``s3_object_url(...)`` returns 200.
+
+    The S3 contract we surfaced in :mod:`nemar.s3` claims the bucket
+    is publicly readable along the canonical
+    ``<host>/<dataset>/objects/<annex_key>`` path. If NEMAR ever locks
+    the bucket down (switching to mandatory pre-signed URLs only), this
+    test fails and the docstrings + CONTEXT.md need a correction.
+
+    We pick a tiny annex key from the live manifest so the test stays
+    fast — only a ``HEAD`` request is sent, not the body.
+    """
+    # Find one small SHA256E-keyed file from the live manifest.
+    with nemar.NEMARClient() as client:
+        index = client.fetch_index(LIVE_DATASET)
+        version = index.resolve_version("latest")
+        manifest = client.fetch_manifest(index, version)
+    sha_entries = [f for f in manifest if f.sha256 and f.size and f.size < 200_000]
+    assert sha_entries, "expected at least one small sha256-checksummed file"
+    file = sha_entries[0]
+    # Reconstruct the annex key from the file's metadata. The path
+    # component after ``/objects/`` is the canonical key.
+    s3_path = file.url.split("/objects/", 1)[1].split("?", 1)[0]
+    canonical = s3_object_url(LIVE_DATASET, s3_path)
+    response = httpx.head(canonical, follow_redirects=False, timeout=10.0)
+    assert response.status_code == 200, (
+        f"expected 200 for unsigned {canonical}, got {response.status_code}"
+    )
 
 
 @pytest.mark.skipif(

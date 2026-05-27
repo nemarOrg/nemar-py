@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 from pytest_httpserver import HTTPServer
+from pytest_httpserver.httpserver import HandlerType
 from werkzeug.wrappers import Request, Response
 
 from tests.fixtures.certs import LocalCa
@@ -100,10 +102,6 @@ class NemarFakeEndpoint:
         self.server.expect_request(path).respond_with_handler(handler)
 
     def slow_response(self, path: str, *, delay_seconds: float) -> None:
-        import time
-
-        from pytest_httpserver.httpserver import HandlerType
-
         published = next(iter(self._published.values()))
         relpath = path.lstrip("/").split("/", 1)[1]
         body = published.files[relpath]
@@ -121,8 +119,6 @@ class NemarFakeEndpoint:
 
     def serve_with_range(self, path: str) -> None:
         """Serve ``path`` with full byte-range request support (HTTP 206)."""
-        from pytest_httpserver.httpserver import HandlerType
-
         published = next(iter(self._published.values()))
         relpath = path.lstrip("/").split("/", 1)[1]
         body = published.files[relpath]
@@ -155,8 +151,6 @@ class NemarFakeEndpoint:
 
     def drop_after_bytes(self, path: str, *, after: int) -> None:
         """Send only ``after`` bytes then close the connection."""
-        from pytest_httpserver.httpserver import HandlerType
-
         published = next(iter(self._published.values()))
         relpath = path.lstrip("/").split("/", 1)[1]
         body = published.files[relpath]

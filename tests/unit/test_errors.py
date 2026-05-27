@@ -14,6 +14,7 @@ from __future__ import annotations
 import pytest
 
 import nemar
+import nemar.errors as nemar_errors
 from nemar._endpoint import DataEndpoint
 from nemar.errors import (
     DataLadError,
@@ -96,8 +97,6 @@ def test_all_typed_errors_are_exported_from_nemar_errors():
     re-exported there too so a single import block covers every
     branchable error class.
     """
-    import nemar.errors as nemar_errors
-
     expected = {
         "NemarError",
         "EndpointError",

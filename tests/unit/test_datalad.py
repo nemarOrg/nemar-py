@@ -24,6 +24,9 @@ than against the real ``datalad`` package.
 
 from __future__ import annotations
 
+import builtins
+import importlib
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -454,8 +457,6 @@ class TestImportSeam:
         Dataset + (CommandError, IncompleteResultsError) tuple all land
         on the bundle in the expected slots.
         """
-        import importlib as _importlib
-
         fake_api = object()
         fake_dataset_cls = type("FakeDataset", (), {})
         fake_command_error = type("FakeCommandError", (Exception,), {})
@@ -481,7 +482,7 @@ class TestImportSeam:
                 "datalad.support.exceptions": fake_exceptions_module,
             }[name]
 
-        monkeypatch.setattr(_importlib, "import_module", _import)
+        monkeypatch.setattr(importlib, "import_module", _import)
         bundle = _datalad._import_datalad()
         assert bundle.api is fake_api
         assert bundle.Dataset is fake_dataset_cls
@@ -494,8 +495,6 @@ class TestImportSeam:
         the ImportError into a :class:`DataLadError` so the orchestrator
         never sees a bare ImportError from a third-party module.
         """
-        import builtins
-
         real_import = builtins.__import__
 
         def _block(name, *args, **kwargs):  # type: ignore[no-untyped-def]
@@ -505,8 +504,6 @@ class TestImportSeam:
 
         monkeypatch.setattr(builtins, "__import__", _block)
         # Also clear any cached copy so the import is re-executed.
-        import sys
-
         for mod in list(sys.modules):
             if mod == "datalad" or mod.startswith("datalad."):
                 monkeypatch.delitem(sys.modules, mod, raising=False)
