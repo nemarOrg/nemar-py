@@ -76,16 +76,42 @@ class TestDunderProtocols:
 
 
 class TestOriginEnforcement:
-    """``VersionManifest`` defers origin checking to the endpoint."""
+    """``VersionManifest`` trusts manifest-advertised file URLs.
 
-    def test_mixed_origin_files_raise(self) -> None:
-        with pytest.raises(RuntimeError, match="outside the configured NEMAR"):
-            _parse_payload(
-                [
-                    {"path": "ok.json"},
-                    {"path": "bad.json", "url": "https://example.org/bad.json"},
-                ]
-            )
+    The production ``data.nemar.org`` manifest mixes
+    ``raw.githubusercontent.com`` (git-tracked small files) and
+    ``nemar.s3.us-east-2.amazonaws.com`` (annex content) origins
+    alongside ``data.nemar.org`` itself. Per-file origin scoping was
+    removed once we confirmed that contract; the endpoint still
+    validates the index + manifest fetches via
+    :func:`nemar._transport.fetch_json`, but file URLs come from the
+    trusted manifest payload and are taken as-is.
+    """
+
+    def test_off_origin_file_url_is_accepted(self) -> None:
+        """Manifest entries with non-``data.nemar.org`` URLs parse cleanly."""
+        manifest = _parse_payload(
+            [
+                {"path": "ok.json"},
+                {
+                    "path": "big.set",
+                    "url": (
+                        "https://nemar.s3.us-east-2.amazonaws.com/"
+                        "annex/objects/.../big.set"
+                    ),
+                },
+                {
+                    "path": "config",
+                    "url": (
+                        "https://raw.githubusercontent.com/"
+                        "nemarDatasets/nm000132/v1.0.0/config"
+                    ),
+                },
+            ]
+        )
+        urls = {f.path: f.url for f in manifest}
+        assert "nemar.s3.us-east-2.amazonaws.com" in urls["big.set"]
+        assert "raw.githubusercontent.com" in urls["config"]
 
 
 class TestEmptyManifestPreservesExistingBehavior:

@@ -272,11 +272,6 @@ def test_parse_version_manifest_accepts_supported_shapes(payload, expected) -> N
         pytest.param([{"path": "/absolute"}], "Unsafe manifest path", id="absolute"),
         pytest.param([{"path": "bad\x00name"}], "NUL byte", id="nul-byte"),
         pytest.param(
-            [{"path": "dataset_description.json", "url": "https://example.org/file"}],
-            "outside the configured NEMAR data origin",
-            id="external-url",
-        ),
-        pytest.param(
             [{"path": "dataset_description.json", "url": 123}],
             "not a non-empty string",
             id="non-string-url",
@@ -303,6 +298,81 @@ def test_parse_version_manifest_rejects_invalid_shapes(payload, message) -> None
     """Manifest parser rejects unsafe, ambiguous, or malformed endpoint payloads."""
     with pytest.raises(RuntimeError, match=message):
         parse_manifest(payload)
+
+
+def test_manifest_parser_dispatches_checksum_algorithm_sha256() -> None:
+    """Production manifest schema: ``checksum_algorithm: "sha256"`` lands
+    on :attr:`DatasetFile.sha256`.
+
+    Pins the parser's handling of the real ``data.nemar.org`` shape
+    where each entry carries one algorithm tag plus an opaque
+    ``checksum`` hex string. Confirmed against the live endpoint
+    response for large content-addressed binaries served from S3.
+    """
+    files = parse_manifest(
+        [
+            {
+                "path": "data/big.set",
+                "size": 12345,
+                "url": "https://nemar.s3.us-east-2.amazonaws.com/abc/big.set",
+                "checksum_algorithm": "sha256",
+                "checksum": "a" * 64,
+            }
+        ]
+    )
+    assert len(files) == 1
+    assert files[0].sha256 == "a" * 64
+    assert files[0].md5 is None
+    assert files[0].git_sha1 is None
+
+
+def test_manifest_parser_dispatches_checksum_algorithm_git() -> None:
+    """Production manifest schema: ``checksum_algorithm: "git"`` lands
+    on :attr:`DatasetFile.git_sha1`.
+
+    Confirmed against the live endpoint response for git-tracked small
+    files served from ``raw.githubusercontent.com``. The git blob hash
+    is content-addressed exactly the way git stores objects
+    (``sha1(b"blob <size>\\0" + content)``), so the verifier picks the
+    matching helper.
+    """
+    files = parse_manifest(
+        [
+            {
+                "path": ".gitattributes",
+                "size": 427,
+                "url": (
+                    "https://raw.githubusercontent.com/"
+                    "nemarDatasets/nm000132/v1.0.0/.gitattributes"
+                ),
+                "checksum_algorithm": "git",
+                "checksum": "a8599a8e5fdb959624a4c8684c1aa55fb69f5522",
+            }
+        ]
+    )
+    assert len(files) == 1
+    assert files[0].git_sha1 == "a8599a8e5fdb959624a4c8684c1aa55fb69f5522"
+    assert files[0].sha256 is None
+    assert files[0].md5 is None
+
+
+def test_manifest_parser_rejects_unknown_checksum_algorithm() -> None:
+    """An unrecognized algorithm tag is a manifest-shape error.
+
+    Defends against silent misverification if NEMAR ever introduces a
+    new algorithm (e.g. ``"sha1"``, ``"crc32"``) the verifier does not
+    understand.
+    """
+    with pytest.raises(RuntimeError, match="Unsupported checksum_algorithm"):
+        parse_manifest(
+            [
+                {
+                    "path": "x",
+                    "checksum_algorithm": "blake2",
+                    "checksum": "deadbeef",
+                }
+            ]
+        )
 
 
 @pytest.mark.parametrize(

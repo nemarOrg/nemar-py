@@ -195,17 +195,45 @@ def file_hash(path: Path, algorithm: Literal["sha256", "md5"]) -> str:
     return digest.hexdigest()
 
 
+def git_blob_sha1(path: Path) -> str:
+    r"""Return the git blob SHA-1 hex digest of ``path``.
+
+    Git stores a file as ``blob <size>\0<content>`` and hashes that
+    serialization with SHA-1; this matches what
+    ``raw.githubusercontent.com`` advertises in NEMAR's manifest for
+    git-tracked files. We compute the header from the on-disk file
+    size (single ``stat``) and stream the content into the digest so
+    arbitrarily large files do not require buffering in memory.
+    """
+    size = path.stat().st_size
+    digest = hashlib.sha1()  # noqa: S324 — required by git's blob hash format.
+    digest.update(b"blob " + str(size).encode("ascii") + b"\x00")
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _hash_matches(file: DatasetFile, path: Path) -> bool:
     """Return ``True`` when the strongest available manifest hash matches.
 
     Hashes are compared case-insensitively because manifests sometimes
-    advertise uppercase hex. ``DatasetFile.sha256`` / ``.md5`` are
-    already normalized by :func:`_models._coerce_hash`, so this guard is
-    a belt-and-braces against historical manifests that bypass the
-    parser.
+    advertise uppercase hex. ``DatasetFile.sha256`` / ``.git_sha1`` /
+    ``.md5`` are already normalized by :func:`_models._coerce_hash`, so
+    this guard is a belt-and-braces against historical manifests that
+    bypass the parser.
+
+    Algorithm priority is the strongest collision resistance first:
+    SHA-256 → git SHA-1 (only on git-tracked files in NEMAR's manifest)
+    → MD5. In NEMAR's real manifest every entry carries exactly one
+    algorithm, so the priority order rarely matters in practice; it is
+    only relevant when callers hand-build a :class:`DatasetFile` with
+    multiple hashes for redundancy.
     """
     if file.sha256 is not None:
         return file_hash(path, "sha256").lower() == file.sha256.lower()
+    if file.git_sha1 is not None:
+        return git_blob_sha1(path).lower() == file.git_sha1.lower()
     if file.md5 is not None:
         return file_hash(path, "md5").lower() == file.md5.lower()
     return True

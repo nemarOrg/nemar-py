@@ -111,7 +111,9 @@ class NEMARClient:
         dataset than the one requested.
         """
         if not DATASET_ID_RE.fullmatch(dataset):
-            raise ValueError('dataset must look like "nm000132".')
+            raise ValueError(
+                'dataset must look like "nm000132" or "on005505".'
+            )
         payload = fetch_json(
             self._client,
             url=self._endpoint.url_for(f"{dataset}/"),

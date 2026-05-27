@@ -19,6 +19,7 @@ def make_dataset_file(
     size: int | None = None,
     sha256: str | None = None,
     md5: str | None = None,
+    git_sha1: str | None = None,
 ) -> DatasetFile:
     """Build a :class:`DatasetFile` with a stable ``base_url/path`` URL.
 
@@ -32,6 +33,7 @@ def make_dataset_file(
         size=size,
         sha256=sha256,
         md5=md5,
+        git_sha1=git_sha1,
     )
 
 

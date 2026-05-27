@@ -53,13 +53,22 @@ class DatasetIndex(BaseModel):
 
 @dataclass(frozen=True)
 class DatasetFile:
-    """A file resolved from a NEMAR manifest."""
+    """A file resolved from a NEMAR manifest.
+
+    The real ``data.nemar.org`` manifest is mixed: small text/config
+    files are served by ``raw.githubusercontent.com`` with a git blob
+    SHA1 hash, while large content-addressed binaries are served by an
+    S3 sibling with a SHA-256 hash. Both cases land here; the verifier
+    picks whichever hash field is populated. Legacy fixtures that still
+    use ``md5`` keep working too.
+    """
 
     path: str
     url: str
     size: int | None = None
     sha256: str | None = None
     md5: str | None = None
+    git_sha1: str | None = None
 
 
 def parse_dataset_index(payload: Any) -> DatasetIndex:
@@ -212,12 +221,35 @@ def _mapping_entries(value: Mapping[str, Any]) -> Iterable[Any]:
 def _entry_to_file(
     entry: Any, *, manifest_url: str, endpoint: DataEndpoint
 ) -> DatasetFile:
+    """Coerce one manifest entry into a :class:`DatasetFile`.
+
+    Supports two manifest shapes:
+
+    * The production ``data.nemar.org`` schema:
+      ``{"path": ..., "size": ..., "url": ...,
+         "checksum_algorithm": "git" | "sha256",
+         "checksum": "<hex>"}``. Files are served from
+      ``raw.githubusercontent.com`` (git-tracked) and
+      ``nemar.s3.us-east-2.amazonaws.com`` (annex content) and the
+      algorithm tag picks which hash field of :class:`DatasetFile`
+      receives the value.
+    * Legacy / fixture shape with explicit ``sha256`` / ``md5`` /
+      ``etag`` keys.
+
+    The ``endpoint`` parameter is retained for signature compatibility
+    but no longer enforces per-file origin scoping: file URLs come from
+    the manifest payload, which was itself fetched through the
+    endpoint-validated transport. Trusting those URLs is what lets the
+    real ``raw.githubusercontent.com`` / S3 origins work end-to-end.
+    """
+    sha256: str | None = None
+    md5: str | None = None
+    git_sha1: str | None = None
+
     if isinstance(entry, str):
         raw_path = entry
         raw_url: Any = None
         size = None
-        sha256 = None
-        md5 = None
     elif isinstance(entry, Mapping):
         raw_path = _first_value(
             entry,
@@ -232,16 +264,54 @@ def _entry_to_file(
         if raw_url is None and isinstance(entry.get("urls"), list) and entry["urls"]:
             raw_url = entry["urls"][0]
         size = _coerce_size(_first_value(entry, "size", "bytes", "size_bytes"))
-        sha256 = _coerce_hash(_first_value(entry, "sha256", "sha256sum"))
-        md5 = _coerce_hash(_first_value(entry, "md5", "md5sum", "etag"))
+        # Production schema: algorithm tag + opaque checksum field. We
+        # check this first so a manifest that uses both shapes (unlikely
+        # but possible during transition) prefers the explicit
+        # algorithm-tagged value.
+        algorithm = entry.get("checksum_algorithm")
+        if isinstance(algorithm, str):
+            checksum_value = _coerce_hash(entry.get("checksum"))
+            if checksum_value is not None:
+                algorithm_lower = algorithm.lower()
+                if algorithm_lower == "sha256":
+                    sha256 = checksum_value
+                elif algorithm_lower == "git":
+                    git_sha1 = checksum_value
+                elif algorithm_lower == "md5":
+                    md5 = checksum_value
+                else:
+                    raise ManifestError(
+                        f"Unsupported checksum_algorithm: {algorithm!r}"
+                    )
+        # Legacy / fixture shape — also try the named hash keys. Skipped
+        # when the algorithm branch already populated the relevant field.
+        if sha256 is None:
+            sha256 = _coerce_hash(_first_value(entry, "sha256", "sha256sum"))
+        if md5 is None:
+            md5 = _coerce_hash(_first_value(entry, "md5", "md5sum", "etag"))
+        if git_sha1 is None:
+            git_sha1 = _coerce_hash(_first_value(entry, "git_sha1"))
     else:
         raise ManifestError(f"Unsupported manifest entry type: {type(entry).__name__}")
 
     path = _validate_relative_path(raw_path)
     url = _resolve_file_url(raw_url, path=path, manifest_url=manifest_url)
-    endpoint.assert_within(url)
+    # Per-file origin scoping was removed once we confirmed the real
+    # NEMAR manifest advertises ``raw.githubusercontent.com`` and S3
+    # URLs alongside ``data.nemar.org``. The trust model is now: the
+    # endpoint validates the index + manifest fetches (via
+    # ``_transport.fetch_json``); file URLs are taken from the trusted
+    # manifest payload. ``endpoint`` is retained on the signature so the
+    # public seam does not churn.
 
-    return DatasetFile(path=path, url=url, size=size, sha256=sha256, md5=md5)
+    return DatasetFile(
+        path=path,
+        url=url,
+        size=size,
+        sha256=sha256,
+        md5=md5,
+        git_sha1=git_sha1,
+    )
 
 
 def _first_value(entry: Mapping[str, Any], *keys: str) -> Any:

@@ -17,7 +17,6 @@ import nemar
 from nemar._endpoint import DataEndpoint
 from nemar._errors import (
     DatasetIndexError,
-    EndpointError,
     ManifestError,
     TransferError,
 )
@@ -246,18 +245,27 @@ class TestManifestSafetyEdges:
                 endpoint=self._endpoint(),
             )
 
-    def test_url_off_origin_rejected(self):
-        with pytest.raises(EndpointError, match="Refusing to download a file"):
-            VersionManifest.parse(
-                [
-                    {
-                        "path": "ok.txt",
-                        "url": "https://malicious.example.com/data",
-                    }
-                ],
-                manifest_url="https://data.nemar.org/nm000132/v1/manifest.json",
-                endpoint=self._endpoint(),
-            )
+    def test_url_off_origin_accepted_under_new_trust_model(self):
+        """Per the post-mapping-audit fix #2, manifest-advertised file URLs
+        are trusted regardless of origin. The endpoint validation lives at
+        the transport layer (index + manifest fetches); file URLs from
+        the trusted manifest payload are taken as-is so legitimate
+        ``raw.githubusercontent.com`` / S3 origins work end-to-end.
+        """
+        manifest = VersionManifest.parse(
+            [
+                {
+                    "path": "ok.txt",
+                    "url": "https://malicious.example.com/data",
+                }
+            ],
+            manifest_url="https://data.nemar.org/nm000132/v1/manifest.json",
+            endpoint=self._endpoint(),
+        )
+        # The URL is preserved verbatim — defense-in-depth is gone here.
+        assert (
+            next(iter(manifest)).url == "https://malicious.example.com/data"
+        )
 
     def test_empty_manifest_rejected(self):
         with pytest.raises(

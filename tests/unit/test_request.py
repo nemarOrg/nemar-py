@@ -157,6 +157,27 @@ class TestInvalidInputsRaise:
         with pytest.raises(ValueError, match="dataset must look like"):
             DownloadRequest.from_kwargs(**_minimum_kwargs(dataset="not-a-dataset"))
 
+    def test_on_prefixed_dataset_id_accepted(self) -> None:
+        """``on*`` is the second valid NEMAR dataset ID prefix.
+
+        The real ``data.nemar.org`` catalog mixes ``nm*`` and ``on*``
+        identifiers (the latter being datasets imported from OpenNeuro
+        without renumbering). Both must round-trip through input
+        validation.
+        """
+        req = DownloadRequest.from_kwargs(**_minimum_kwargs(dataset="on005505"))
+        assert req.dataset == "on005505"
+
+    def test_nm_prefixed_dataset_id_still_accepted(self) -> None:
+        """Backward compatibility: the original ``nm*`` form keeps working."""
+        req = DownloadRequest.from_kwargs(**_minimum_kwargs(dataset="nm000132"))
+        assert req.dataset == "nm000132"
+
+    def test_unknown_prefix_still_rejected(self) -> None:
+        """Only ``nm*`` and ``on*`` are advertised by NEMAR; other prefixes raise."""
+        with pytest.raises(ValueError, match="dataset must look like"):
+            DownloadRequest.from_kwargs(**_minimum_kwargs(dataset="zz000132"))
+
     def test_negative_retries_raises(self) -> None:
         with pytest.raises(ValueError, match="max_retries must be non-negative"):
             DownloadRequest.from_kwargs(**_minimum_kwargs(max_retries=-1))

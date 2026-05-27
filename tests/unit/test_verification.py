@@ -17,6 +17,7 @@ from nemar._verification import (
     check,
     detect_case_collisions,
     file_hash,
+    git_blob_sha1,
     partition_pending,
 )
 from tests.fixtures.factories import make_dataset_file as _make_file
@@ -107,6 +108,38 @@ class TestCheck:
                 VerifyPolicy(verify_hash=False, verify_size=False),
             )
             is VerifyResult.OK
+        )
+
+    def test_git_sha1_hash_match_returns_ok(self, tmp_path: Path) -> None:
+        """A :class:`DatasetFile` carrying ``git_sha1`` verifies against
+        the local file's git blob SHA-1.
+
+        Pins that the check() dispatcher picks the git path when
+        :attr:`DatasetFile.git_sha1` is set and no stronger hash is
+        present — the situation for every
+        ``raw.githubusercontent.com``-served file in NEMAR's manifest.
+        """
+        content = b"hello\n"
+        file = _make_file(
+            "x.txt",
+            size=len(content),
+            git_sha1="ce013625030ba8dba906f756967f9e9ca394464a",
+        )
+        (tmp_path / file.path).write_bytes(content)
+        assert check(file, tmp_path / file.path, VerifyPolicy()) is VerifyResult.OK
+
+    def test_git_sha1_hash_mismatch_is_detected(self, tmp_path: Path) -> None:
+        """Wrong git blob hash → :attr:`VerifyResult.HASH_MISMATCH`."""
+        content = b"hello\n"
+        file = _make_file(
+            "x.txt",
+            size=len(content),
+            git_sha1="0" * 40,  # plausible shape, wrong value
+        )
+        (tmp_path / file.path).write_bytes(content)
+        assert (
+            check(file, tmp_path / file.path, VerifyPolicy())
+            is VerifyResult.HASH_MISMATCH
         )
 
 
@@ -295,3 +328,41 @@ class TestFileHash:
         path = tmp_path / "x.bin"
         path.write_bytes(data)
         assert file_hash(path, "md5") == hashlib.md5(data).hexdigest()
+
+
+class TestGitBlobSha1:
+    """The git-blob SHA-1 helper used for ``raw.githubusercontent.com``
+    files in NEMAR's manifest.
+    """
+
+    def test_known_blob_matches_git_format(self, tmp_path: Path) -> None:
+        """Empty file → ``e69de29bb2d1d6434b8b29ae775ad8c2e48c5391``.
+
+        This is the canonical empty-blob SHA-1 in git
+        (``git hash-object /dev/null``). Hard-coded so any drift in the
+        helper is loud.
+        """
+        path = tmp_path / "empty.bin"
+        path.write_bytes(b"")
+        assert git_blob_sha1(path) == "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+
+    def test_known_short_blob(self, tmp_path: Path) -> None:
+        """``b"hello\\n"`` → ``ce013625030ba8dba906f756967f9e9ca394464a``.
+
+        Another canonical case: ``git hash-object`` of a tiny file. Pins
+        the prefix format ``"blob <size>\\0<content>"`` so silently
+        switching to plain ``sha1(content)`` (a common bug) would
+        break this test immediately.
+        """
+        path = tmp_path / "hello.txt"
+        path.write_bytes(b"hello\n")
+        assert git_blob_sha1(path) == "ce013625030ba8dba906f756967f9e9ca394464a"
+
+    def test_differs_from_plain_sha1(self, tmp_path: Path) -> None:
+        """Plain SHA-1 over the content alone must NOT match the git blob
+        hash — that's the whole point of the helper.
+        """
+        data = b"x" * 64
+        path = tmp_path / "x.bin"
+        path.write_bytes(data)
+        assert git_blob_sha1(path) != hashlib.sha1(data).hexdigest()  # noqa: S324
