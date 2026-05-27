@@ -36,12 +36,11 @@
   be selected by pipeline name from `derivatives/<pipeline>/`.
 - **Transfer backend**: The concrete download implementation used after file
   selection. Modeled as adapters of one seam, all exposing the
-  `TransferBackend` protocol in `src/nemar/_transfer.py`. Three HTTPS-only
-  adapters and one optional first-layer adapter exist:
-  - `Aria2Backend` (preferred HTTPS adapter, shells out to the `aria2c`
-    subprocess).
-  - `PythonBackend` (always-available HTTPS fallback, thread pool over a
-    shared `httpx.Client` with a per-batch connection pool).
+  `TransferBackend` protocol in `src/nemar/_transfer.py`. One HTTPS
+  adapter and one optional first-layer adapter exist:
+  - `PythonBackend` — the HTTPS adapter. Thread pool over a shared
+    `httpx.Client` with a per-batch connection pool; owns the Range/206
+    resume, HTTP 416 recovery, and per-file retry semantics.
   - `DataLadBackend` (`src/nemar/_datalad.py`) — optional first layer that
     clones the dataset's DataLad sibling advertised by the NEMAR index
     (`DatasetIndex.datalad_url`) and runs `datalad get` against the
@@ -51,34 +50,31 @@
     `DataLadError` (`src/nemar/_errors.py`) — a subclass of `TransferError`
     the layered wrapper catches narrowly.
   - `LayeredBackend` (`src/nemar/_datalad.py`) — wraps `DataLadBackend`
-    as a primary over an HTTPS fallback. On `DataLadError` it writes a
+    as a primary over `PythonBackend`. On `DataLadError` it writes a
     tqdm notice and re-runs the same file set through the HTTPS adapter.
     Every other transfer failure propagates. This is the steady-state
     contract whenever a `datalad_url` is known: DataLad first, HTTPS
     second.
 
   Selection is policy-driven via `TransferOptions.backend`
-  ("auto" | "aria2" | "python" | "datalad") and resolved by
-  `select_backend` in `src/nemar/_transfer.py`:
-  - `auto` + `datalad_url` advertised → `LayeredBackend` over the
-    aria2-or-python pick.
-  - `auto` + no `datalad_url` → `Aria2Backend` if on PATH, else
+  ("auto" | "python" | "datalad") and resolved by `select_backend` in
+  `src/nemar/_transfer.py`:
+  - `auto` + `datalad_url` advertised → `LayeredBackend` over
     `PythonBackend`.
-  - `datalad` + `datalad_url` advertised → `LayeredBackend` over the
-    aria2-or-python pick. The fallback to HTTPS happens **even when
+  - `auto` + no `datalad_url` → `PythonBackend`.
+  - `datalad` + `datalad_url` advertised → `LayeredBackend` over
+    `PythonBackend`. The fallback to HTTPS happens **even when
     `datalad` was requested explicitly** — the two-layer contract is
     steady-state.
-  - `datalad` + no `datalad_url` → plain HTTPS pick, with a tqdm notice.
-  - `aria2`, `python` → opt-out from the DataLad layer; behavior
-    unchanged.
+  - `datalad` + no `datalad_url` → `PythonBackend`, with a tqdm notice.
+  - `python` → opt-out from the DataLad layer; HTTPS only.
 
   The backend choice and its runtime knobs (concurrency, stream
-  timeout, aria2 timeout) are bundled in the `TransferOptions` value
-  type (`src/nemar/_request.py`), which travels inside a
-  `DownloadRequest`. The `datalad_url` and resolved version tag are
-  threaded by `_run` (`src/nemar/_download.py`) into `select_backend`
-  *after* the index fetch, so they do not appear on `TransferOptions`
-  itself.
+  timeout) are bundled in the `TransferOptions` value type
+  (`src/nemar/_request.py`), which travels inside a `DownloadRequest`.
+  The `datalad_url` and resolved version tag are threaded by `_run`
+  (`src/nemar/_download.py`) into `select_backend` *after* the index
+  fetch, so they do not appear on `TransferOptions` itself.
 - **Download request**: A `DownloadRequest` value type
   (`src/nemar/_request.py`) bundling the normalized dataset identity,
   `DataEndpoint`, requested tag, target path, BIDS query, include/exclude

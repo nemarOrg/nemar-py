@@ -6,7 +6,7 @@ by the NEMAR data endpoint as ``index.datalad_url``) and runs
 wraps a primary backend with an HTTPS fallback: when the primary raises
 :class:`~nemar._errors.DataLadError`, the wrapper writes a one-line tqdm
 notice and re-runs the same file set through the fallback adapter
-(typically the aria2 or python HTTPS path). This is the steady-state
+(the python HTTPS path). This is the steady-state
 contract — the two-layer model the public API exposes whenever a
 ``datalad_url`` is known.
 
@@ -164,7 +164,7 @@ class DataLadBackend:
         ``options.max_concurrent_downloads`` is forwarded as DataLad's
         ``jobs`` argument. The two are semantically related but not
         identical: ``max_concurrent_downloads`` caps simultaneous HTTP
-        streams in the Python / aria2 backends, while ``jobs`` caps
+        streams in the Python backend, while ``jobs`` caps
         simultaneous git-annex content retrievals (each of which may
         itself open multiple HTTP connections). They are deliberately
         bound to the same knob so the user has one budget to tune.

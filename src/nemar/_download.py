@@ -14,9 +14,9 @@ download
 Metadata-phase fetches go through :class:`nemar._client.NEMARClient`, which
 owns one ``httpx.Client`` (and one TLS session) per ``download()`` call and
 delegates the retry loop + redirect-origin check to
-:func:`nemar._transport.fetch_json`. Bytes-on-the-wire concerns (the aria2 /
-python adapters, the per-file retry loop, the input-file format) live in
-:mod:`nemar._transfer`. This module is the orchestrator only.
+:func:`nemar._transport.fetch_json`. Bytes-on-the-wire concerns (the
+HTTPS adapter, the per-file retry loop) live in :mod:`nemar._transfer`.
+This module is the orchestrator only.
 """
 
 from __future__ import annotations
@@ -211,7 +211,6 @@ def download(
     max_concurrent_downloads: int = 16,
     metadata_timeout: float = 30.0,
     stream_timeout: float = 60.0,
-    aria2_timeout: float | None = None,
     data_url: str = DEFAULT_DATA_URL,
 ) -> None:
     """Download a public NEMAR dataset through ``data.nemar.org``.
@@ -246,7 +245,6 @@ def download(
         max_concurrent_downloads=max_concurrent_downloads,
         metadata_timeout=metadata_timeout,
         stream_timeout=stream_timeout,
-        aria2_timeout=aria2_timeout,
         data_url=data_url,
     )
     _run(request)

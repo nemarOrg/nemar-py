@@ -327,13 +327,12 @@ def _validate_relative_path(raw_path: Any) -> str:
         raise ManifestError("Manifest entry is missing a non-empty relative path.")
     if "\x00" in raw_path:
         raise ManifestError(f"Manifest path contains a NUL byte: {raw_path!r}")
-    # Reject ASCII control characters (newline, CR, tab, etc.) and DEL. The
-    # aria2 input-file format uses `\n` as a stanza separator, so a path
-    # containing one would let a malicious manifest inject a second URL +
-    # arbitrary `out=` directive — bypassing the DataEndpoint origin guard
-    # because the bytes-on-the-wire phase trusts the parsed manifest paths.
-    # Keep this check before the PurePosixPath round-trip so that the parser
-    # rejects the input rather than relying on incidental ``..`` detection.
+    # Reject ASCII control characters (newline, CR, tab, etc.) and DEL.
+    # A malicious manifest path containing these characters could
+    # confuse downstream consumers (subprocess argv, downloader input
+    # files, etc.). Keep this check before the PurePosixPath round-trip
+    # so the parser rejects the input rather than relying on incidental
+    # ``..`` detection.
     if any(ord(c) < 0x20 or c == "\x7f" for c in raw_path):
         raise ManifestError(
             f"Manifest path contains control characters: {raw_path!r}"

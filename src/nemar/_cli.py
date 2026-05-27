@@ -199,10 +199,10 @@ def download_cli(
         typer.Option(
             "--downloader",
             help=(
-                "Transfer backend: auto, aria2, python, or datalad. "
+                "Transfer backend: auto, python, or datalad. "
                 "auto and datalad layer DataLad over HTTPS when the dataset "
-                "index advertises a datalad_url; aria2 and python opt out of "
-                "the DataLad layer."
+                "index advertises a datalad_url; python opts out of the "
+                "DataLad layer."
             ),
         ),
     ] = "auto",

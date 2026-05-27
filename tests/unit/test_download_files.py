@@ -51,7 +51,6 @@ def _python_options() -> TransferOptions:
         backend="python",
         max_concurrent_downloads=4,
         stream_timeout=30.0,
-        aria2_timeout=None,
     )
 
 
@@ -245,12 +244,7 @@ def test_endpoint_omitted_does_not_enforce_origin(
 def test_default_options_picks_python_backend(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """No options= argument → uses the python backend defaults.
-
-    Predictable default: the python backend is always available and
-    doesn't depend on PATH state. Callers who want aria2 must opt in
-    via ``options=TransferOptions(backend="aria2", ...)``.
-    """
+    """No options= argument → uses the python backend defaults."""
     content = b"defaults are fine"
     file = _make_file(content, path="d.bin")
 

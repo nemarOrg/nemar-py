@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -39,11 +38,6 @@ def nemar_endpoint(
     _nemar_https_server.clear()
     monkeypatch.setenv("SSL_CERT_FILE", str(local_ca.ca_pem_path))
     return NemarFakeEndpoint(_nemar_https_server)
-
-
-@pytest.fixture
-def aria2c_present() -> bool:
-    return shutil.which("aria2c") is not None
 
 
 @pytest.fixture

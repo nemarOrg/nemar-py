@@ -25,7 +25,6 @@ from nemar.errors import (
     ManifestError,
     NemarError,
     SelectionError,
-    TransferError,
     TransportError,
     VerificationError,
 )
@@ -161,25 +160,6 @@ def test_verification_failure_is_a_runtime_error(tmp_path: Path):
             [file], target_dir=tmp_path, policy=VerifyPolicy()
         )
     assert isinstance(info.value, VerificationError)
-
-
-def test_transfer_no_aria2c_is_a_runtime_error(monkeypatch):
-    """select_backend('aria2') without aria2c raises a RuntimeError (subclass)."""
-    from nemar._request import TransferOptions
-    from nemar._transfer import select_backend
-
-    monkeypatch.setattr("nemar._transfer.shutil.which", lambda _: None)
-    options = TransferOptions(
-        backend="aria2",
-        max_concurrent_downloads=1,
-        stream_timeout=60.0,
-        aria2_timeout=None,
-    )
-    with pytest.raises(
-        RuntimeError, match='"aria2" downloader requires aria2c'
-    ) as info:
-        select_backend(options)
-    assert isinstance(info.value, TransferError)
 
 
 def test_transport_invalid_json_is_a_runtime_error():

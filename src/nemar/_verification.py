@@ -184,9 +184,8 @@ def detect_case_collisions(
 def file_hash(path: Path, algorithm: Literal["sha256", "md5"]) -> str:
     """Return the hex digest of ``path`` under ``algorithm``.
 
-    Exposed at module level so the aria2 path (which delegates checksum
-    enforcement to aria2c) can still share the same primitive when it
-    needs a Python-side digest.
+    Exposed at module level so future transfer adapters can share the
+    same primitive when they need a Python-side digest.
     """
     digest = hashlib.new(algorithm)
     with path.open("rb") as handle:

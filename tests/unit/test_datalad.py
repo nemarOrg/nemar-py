@@ -147,7 +147,6 @@ def _options(*, concurrency: int = 4) -> TransferOptions:
         backend="datalad",
         max_concurrent_downloads=concurrency,
         stream_timeout=60.0,
-        aria2_timeout=None,
     )
 
 
@@ -416,13 +415,13 @@ class TestLayeredBackend:
         assert recorded_target == tmp_path
 
     def test_non_datalad_error_propagates(self, tmp_path: Path) -> None:
-        """A plain TransferError (e.g. aria2 timeout) must not silently retry
-        on the fallback — only the DataLad-specific subclass triggers
-        fallback. Otherwise a real HTTPS failure on the *primary* (when the
-        primary itself is an HTTPS backend) would silently retry on a second
-        HTTPS backend, defeating the point of an explicit choice.
+        """A plain TransferError must not silently retry on the fallback
+        — only the DataLad-specific subclass triggers fallback. Otherwise
+        a real HTTPS failure on the *primary* (when the primary itself
+        is an HTTPS backend) would silently retry on a second HTTPS
+        backend, defeating the point of an explicit choice.
         """
-        primary = _RecordingBackend(raises=TransferError("aria2 timed out"))
+        primary = _RecordingBackend(raises=TransferError("upstream timed out"))
         fallback = _RecordingBackend()
 
         with pytest.raises(TransferError, match="timed out"):

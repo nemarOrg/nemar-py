@@ -2,18 +2,14 @@
 
 The orchestrator in :mod:`nemar._download` is policy and choreography
 (index, version, metadata, manifest, selection, target check); this
-module is the single seam where the bytes actually move. Two adapters
-of one seam:
+module is the single seam where the bytes actually move.
 
-* :class:`Aria2Backend` shells out to the ``aria2c`` subprocess. It is
-  preferred for speed (multiplexed connections, native parallelism) and
-  is selected automatically when ``aria2c`` is on ``PATH``.
 * :class:`PythonBackend` uses a thread pool over a shared
-  ``httpx.Client`` with a small connection pool. It is the always-available
-  fallback and exercises the same Range/206 + 416-recovery + retry
-  contracts the production endpoint sometimes needs.
+  ``httpx.Client`` with a small connection pool. It is the only HTTPS
+  adapter and exercises the Range/206 + 416-recovery + retry contracts
+  the production endpoint sometimes needs.
 
-Both implement the :class:`TransferBackend` protocol:
+It implements the :class:`TransferBackend` protocol:
 
 .. code-block:: python
 
@@ -28,32 +24,15 @@ Both implement the :class:`TransferBackend` protocol:
     ) -> None
 
 Selection is policy-driven via :class:`TransferOptions.backend` ("auto" |
-"aria2" | "python") and resolved by :func:`select_backend`. Explicit
-``"aria2"`` with no ``aria2c`` on ``PATH`` raises
-``RuntimeError('The "aria2" downloader requires aria2c on PATH.')`` --
-that exact wording is part of the public contract because the public
-error path is what library callers and the CLI surface to users.
-
-Test hook
----------
-
-``_ARIA2_EXTRA_ARGS`` is a module-level list of extra command-line
-arguments appended to every ``aria2c`` invocation. It is empty in
-production. Integration / e2e fixtures monkey-patch it (typically via
-``monkeypatch.setattr(nemar._transfer, "_ARIA2_EXTRA_ARGS",
-["--check-certificate=false"])``) when targeting a local HTTPS fixture
-signed by a private CA -- aria2c on macOS uses AppleTLS, which silently
-ignores ``--ca-certificate``. The hook lives here, next to the only
-place that consumes it. Not part of the public API.
+"python" | "datalad") and resolved by :func:`select_backend`. The
+``"datalad"`` path layers :mod:`~nemar._datalad` over the HTTPS pick
+when the dataset index advertises a ``datalad_url``; the layered
+backend falls back to HTTPS on any DataLad failure.
 """
 
 from __future__ import annotations
 
 import concurrent.futures
-import os
-import shutil
-import subprocess
-import tempfile
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -76,14 +55,6 @@ from nemar._verification import (
     partition_pending,
 )
 from nemar._verification import check as _verify_check
-
-# Private hook: extra command-line arguments appended to every ``aria2c``
-# invocation. Empty in production. Test fixtures monkey-patch this to
-# inject flags such as ``--check-certificate=false`` when targeting the
-# local HTTPS fixture server (aria2c on macOS uses AppleTLS, which
-# silently ignores ``--ca-certificate`` and rejects the self-signed
-# chain otherwise). Not part of the public API.
-_ARIA2_EXTRA_ARGS: list[str] = []
 
 
 class _RetryableError(Exception):
@@ -143,50 +114,34 @@ def select_backend(
 ) -> TransferBackend:
     """Resolve ``options.backend`` against the runtime environment.
 
-    Two axes drive the decision: the policy string in
-    ``options.backend`` and whether the dataset index advertised a
-    ``datalad_url`` (which the orchestrator threads in after the index
-    fetch).
+    One axis drives the decision: whether the dataset index advertised
+    a ``datalad_url`` (which the orchestrator threads in after the
+    index fetch).
 
-    * ``"aria2"`` and ``aria2c`` on ``PATH`` → :class:`Aria2Backend`.
-    * ``"aria2"`` and no ``aria2c`` → ``RuntimeError`` with the
-      preserved message ``'The "aria2" downloader requires aria2c on
-      PATH.'``. Explicit ``aria2`` is an opt-out from the DataLad
+    * ``"python"`` → :class:`PythonBackend`. Opt-out from the DataLad
       layer even when a ``datalad_url`` is available.
-    * ``"python"`` → :class:`PythonBackend`. Also an opt-out from the
-      DataLad layer.
     * ``"auto"`` and ``datalad_url`` is set → :class:`LayeredBackend`
-      wrapping :class:`~nemar._datalad.DataLadBackend` over the
-      aria2-or-python pick.
-    * ``"auto"`` and no ``datalad_url`` → :class:`Aria2Backend` when
-      ``aria2c`` is present, otherwise :class:`PythonBackend` (with a
-      one-line notice to ``tqdm.write``).
+      wrapping :class:`~nemar._datalad.DataLadBackend` over
+      :class:`PythonBackend`.
+    * ``"auto"`` and no ``datalad_url`` → :class:`PythonBackend`.
     * ``"datalad"`` and ``datalad_url`` is set →
-      :class:`LayeredBackend` over the aria2-or-python pick. Even with
+      :class:`LayeredBackend` over :class:`PythonBackend`. Even with
       an explicit ``datalad`` policy, every DataLad failure falls
       back to HTTPS — that is the steady-state contract the public
       API exposes.
-    * ``"datalad"`` and no ``datalad_url`` → degrades to the plain
-      aria2-or-python pick with a tqdm notice. There is no primary to
-      try, so the layered wrapper would be a tautology.
+    * ``"datalad"`` and no ``datalad_url`` → degrades to plain
+      :class:`PythonBackend` with a tqdm notice. There is no primary
+      to try, so the layered wrapper would be a tautology.
     """
-    has_aria2 = shutil.which("aria2c") is not None
     requested = options.backend
 
-    # Explicit HTTPS-only choices opt out of the DataLad layer entirely.
-    if requested == "aria2":
-        if not has_aria2:
-            raise TransferError(
-                'The "aria2" downloader requires aria2c on PATH.'
-            )
-        return Aria2Backend()
     if requested == "python":
         return PythonBackend()
 
     # From here ``requested`` is "auto" or "datalad". The HTTPS pick is
     # both the standalone result when no DataLad URL is known and the
     # fallback inside the layered wrapper when one is.
-    https = Aria2Backend() if has_aria2 else PythonBackend()
+    https = PythonBackend()
 
     if datalad_url is not None:
         # Import lazily so callers who never select the DataLad path do not
@@ -205,111 +160,7 @@ def select_backend(
             "DataLad backend requested but the dataset index did not advertise "
             "a datalad_url; using the HTTPS downloader."
         )
-    elif not has_aria2:
-        tqdm.write("aria2c was not found on PATH; using the Python downloader.")
     return https
-
-
-class Aria2Backend:
-    """Adapter that drives the ``aria2c`` subprocess.
-
-    Writes the manifest to a temp input file and shells out. The
-    aria2c command-line flags are pinned: ``--continue=true`` and
-    ``--auto-file-renaming=false`` give resume semantics, the
-    ``--max-tries`` / ``--retry-wait`` pair lets aria2c own its own
-    retry loop with attempts that mirror the Python loop's count, and
-    the ``--split`` cap keeps ``max_concurrent_downloads * split``
-    bounded at 32 to avoid connection storms on servers and corporate
-    proxies that enforce low per-host connection limits.
-
-    The ``SSL_CERT_FILE`` environment variable is forwarded to
-    ``--ca-certificate`` because aria2c does not honour the variable
-    the way ``httpx`` / ``certifi`` do. The module-level
-    :data:`_ARIA2_EXTRA_ARGS` list is appended last for test
-    instrumentation.
-    """
-
-    def transfer(
-        self,
-        files: Sequence[DatasetFile],
-        *,
-        target_dir: Path,
-        options: TransferOptions,
-        verify: VerifyPolicy,
-        retry: RetryPolicy,
-    ) -> None:
-        for file in files:
-            (target_dir / file.path).parent.mkdir(parents=True, exist_ok=True)
-
-        with tempfile.NamedTemporaryFile(
-            "w", encoding="utf-8", delete=False
-        ) as input_file:
-            input_path = Path(input_file.name)
-            for file in files:
-                input_file.write(f"{file.url}\n")
-                input_file.write(f"  out={file.path}\n")
-                checksum = _aria2_checksum(file) if verify.verify_hash else None
-                if checksum is not None:
-                    input_file.write(f"  checksum={checksum}\n")
-
-        max_concurrent_downloads = options.max_concurrent_downloads
-        cmd = [
-            "aria2c",
-            "--continue=true",
-            "--auto-file-renaming=false",
-            "--allow-overwrite=true",
-            "--conditional-get=true",
-            "--file-allocation=none",
-            "--remote-time=true",
-            f"--max-tries={retry.max_attempts}",
-            "--retry-wait=2",
-            f"--max-concurrent-downloads={max_concurrent_downloads}",
-            f"--max-connection-per-server={max_concurrent_downloads}",
-            # Cap split so that max_concurrent_downloads * split <= 32,
-            # preventing connection storms on servers and corporate
-            # proxies that enforce low per-host connection limits
-            # (commonly 32-64).
-            f"--split={max(1, min(16, 32 // max_concurrent_downloads))}",
-            "--min-split-size=1M",
-            f"--dir={target_dir}",
-            f"--input-file={input_path}",
-        ]
-        # ``aria2c`` does not honour ``SSL_CERT_FILE`` the way ``httpx`` /
-        # ``certifi`` do. When callers pre-configure a custom CA bundle
-        # through the environment (e.g. corporate proxies, on-premise
-        # mirrors, local test fixtures using a private CA), forward it
-        # explicitly so the aria2 backend can verify the chain against
-        # the same trust store as the rest of the client. Harmless
-        # against the public NEMAR endpoint which uses a publicly-trusted
-        # certificate.
-        ssl_cert_file = os.environ.get("SSL_CERT_FILE")
-        if ssl_cert_file:
-            cmd.append(f"--ca-certificate={ssl_cert_file}")
-        cmd.extend(_ARIA2_EXTRA_ARGS)
-        try:
-            subprocess.run(cmd, check=True, timeout=options.aria2_timeout)
-        except subprocess.TimeoutExpired as exc:
-            raise TransferError(
-                f"aria2c timed out after {options.aria2_timeout} seconds."
-            ) from exc
-        except subprocess.CalledProcessError as exc:
-            raise TransferError(
-                "aria2c failed to download the selected NEMAR files."
-            ) from exc
-        finally:
-            input_path.unlink(missing_ok=True)
-        # The orchestrator runs ``assert_all_present`` with the caller's
-        # full verify policy (size + hash) after this function returns
-        # -- the aria2 path does not need a separate verify sweep.
-
-
-def _aria2_checksum(file: DatasetFile) -> str | None:
-    """Return the strongest available manifest checksum in aria2 syntax."""
-    if file.sha256 is not None:
-        return f"sha-256={file.sha256}"
-    if file.md5 is not None:
-        return f"md5={file.md5}"
-    return None
 
 
 class PythonBackend:
@@ -318,9 +169,8 @@ class PythonBackend:
     Opens one shared ``httpx.Client`` for the whole batch so keepalive
     can amortize the TCP+TLS handshake across the thousands of small
     TSV/JSON files a BIDS dataset typically carries. The connection
-    pool caps mirror the per-server connection budget the aria2 path
-    already enforces (~2x concurrency cap so retries do not starve
-    in-flight requests).
+    pool is sized at ~2x the concurrency cap so retries do not starve
+    in-flight requests.
 
     Per-file handling lives in
     :func:`_transfer_one_with_python` (the retry driver) and
@@ -348,9 +198,8 @@ class PythonBackend:
         # thousands of small TSV/JSON files; opening a fresh client per
         # file means a TCP+TLS handshake per file. Reusing a single
         # client with a connection pool lets keepalive carry the cost
-        # across the batch. The pool caps mirror the per-server
-        # connection budget the aria2 path already enforces (~2x
-        # concurrency cap so retries do not starve in-flight requests).
+        # across the batch. The pool is sized at ~2x the concurrency
+        # cap so retries do not starve in-flight requests.
         #
         # TODO: enterprise users behind custom-CA MITM proxies would
         # benefit from ``truststore.SSLContext()`` here so the OS trust
@@ -615,7 +464,6 @@ def download_files(
             backend="python",
             max_concurrent_downloads=16,
             stream_timeout=60.0,
-            aria2_timeout=None,
         )
     if verify is None:
         verify = VerifyPolicy()
@@ -631,7 +479,7 @@ def download_files(
         return
     # Bulk file lists do not carry a DataLad URL, so the layered backend
     # never applies here. ``select_backend`` with ``datalad_url=None``
-    # returns a plain HTTPS adapter (the aria2-or-python pick).
+    # returns the plain HTTPS adapter.
     backend = select_backend(options, datalad_url=None)
     pending = partition_pending(
         list(files),

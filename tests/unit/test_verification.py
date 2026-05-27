@@ -315,7 +315,7 @@ class TestDetectCaseCollisions:
 
 
 class TestFileHash:
-    """The exported primitive used by the aria2 path."""
+    """The exported file-hash primitive."""
 
     def test_sha256(self, tmp_path: Path) -> None:
         data = b"some content"

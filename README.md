@@ -27,11 +27,11 @@ nemar-py versions --dataset nm000132
 `--tag latest` resolves through the endpoint's `latest` field, and explicit
 tags are validated against the endpoint's advertised `versions`.
 
-By default, `nemar-py` uses `aria2c` when it is available on `PATH`; otherwise
-it uses a built-in HTTP downloader. When the NEMAR dataset index advertises a
-DataLad sibling and the optional `datalad` extra is installed, `nemar-py`
-clones it first and runs `datalad get` for the requested files; HTTPS is the
-automatic fallback when anything in the DataLad path fails.
+By default, `nemar-py` uses a built-in HTTPS downloader. When the NEMAR
+dataset index advertises a DataLad sibling and the optional `datalad`
+extra is installed, `nemar-py` clones it first and runs `datalad get`
+for the requested files; HTTPS is the automatic fallback when anything
+in the DataLad path fails.
 
 ```shell
 pip install nemar-py[datalad]
@@ -41,7 +41,6 @@ Pick the backend explicitly if you need to:
 
 ```shell
 nemar-py download --dataset nm000132 --downloader datalad   # DataLad, HTTPS fallback
-nemar-py download --dataset nm000132 --downloader aria2     # HTTPS only (aria2c)
 nemar-py download --dataset nm000132 --downloader python    # HTTPS only (built-in)
 ```
 

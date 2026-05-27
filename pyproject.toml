@@ -87,7 +87,6 @@ addopts = ["--tb=short", "-ra", "-vv", "--strict-markers"]
 markers = [
   "integration: uses the local HTTPS fixture server",
   "e2e: end-to-end (subprocess and/or real downloader)",
-  "aria2: requires aria2c on PATH",
   "live: hits data.nemar.org; gated by NEMAR_LIVE_TEST=1",
   "slow: takes more than 2 seconds",
 ]

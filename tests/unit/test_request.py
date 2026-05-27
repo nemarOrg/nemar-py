@@ -51,7 +51,6 @@ def _minimum_kwargs(**overrides: object) -> dict[str, object]:
         "max_concurrent_downloads": 16,
         "metadata_timeout": 30.0,
         "stream_timeout": 60.0,
-        "aria2_timeout": None,
         "data_url": "https://data.nemar.org/",
     }
     base.update(overrides)
@@ -79,7 +78,6 @@ class TestFromKwargsBuildsValidRequest:
             backend="auto",
             max_concurrent_downloads=16,
             stream_timeout=60.0,
-            aria2_timeout=None,
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             opts.backend = "python"  # type: ignore[misc]
@@ -219,7 +217,6 @@ class TestTransferOptionsDefaults:
         assert req.transfer.backend == "auto"
         assert req.transfer.max_concurrent_downloads == 16
         assert req.transfer.stream_timeout == 60.0
-        assert req.transfer.aria2_timeout is None
 
     def test_transfer_options_override(self) -> None:
         req = DownloadRequest.from_kwargs(
@@ -227,13 +224,11 @@ class TestTransferOptionsDefaults:
                 downloader="python",
                 max_concurrent_downloads=4,
                 stream_timeout=15.0,
-                aria2_timeout=120.0,
             )
         )
         assert req.transfer.backend == "python"
         assert req.transfer.max_concurrent_downloads == 4
         assert req.transfer.stream_timeout == 15.0
-        assert req.transfer.aria2_timeout == 120.0
 
 
 class TestVerifyAndRetryPolicies:

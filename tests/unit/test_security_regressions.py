@@ -5,8 +5,8 @@ review on the architectural-deepening branch. They are written BEFORE
 the fixes (TDD); each one should fail until its corresponding fix lands.
 
 1. Manifest path with control characters (newline, CR, tab) MUST be
-   rejected at parse time — otherwise the aria2 input-file driver can be
-   tricked into stanza injection (off-origin URL, arbitrary out= path).
+   rejected at parse time — defense-in-depth against future transfer
+   adapters that might consume manifest paths as structured input.
 2. download_one MUST allow callers to enforce origin scoping via an
    optional endpoint= argument.
 3. PythonBackend.transfer MUST honor a caller-supplied custom
@@ -29,11 +29,13 @@ from nemar._models import VersionManifest
 
 
 class TestManifestPathControlCharsRejected:
-    """P1 #1 — aria2 input-file injection via newline in manifest path.
+    """P1 #1 — control characters in manifest paths.
 
-    The aria2 input file uses ``\\n`` to separate stanzas. A path with an
-    embedded newline can inject a new URL+out pair, fully bypassing the
-    DataEndpoint origin guarantee for users with aria2c on PATH.
+    Defense-in-depth: a malicious manifest path containing newlines,
+    CRs, tabs, or DEL could confuse future structured consumers
+    (subprocess argv, input files, etc.) even though the current
+    HTTPS adapter consumes paths via ``Path()`` directly. Keep the
+    parser strict so the boundary is unambiguous.
     """
 
     def _endpoint(self) -> DataEndpoint:
@@ -144,7 +146,6 @@ class TestPythonBackendHonorsCustomPolicies:
             backend="python",
             max_concurrent_downloads=1,
             stream_timeout=5.0,
-            aria2_timeout=None,
         )
         zero_retry_policy = RetryPolicy.default().with_attempts(0)
         verify = VerifyPolicy(verify_size=False, verify_hash=False)

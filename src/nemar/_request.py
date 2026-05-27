@@ -9,11 +9,11 @@ transfer / verify / retry policies. The orchestrator becomes a thin
 algorithm of six step calls in order against a single ``request`` value.
 
 :class:`TransferOptions` is the small bundle of transfer-knob defaults
-(backend, concurrency, stream timeout, aria2 timeout) that travels with
-the request. It lives next to :class:`DownloadRequest` rather than in a
-separate ``_transfer_options.py`` because the two are constructed and
-consumed together; splitting them would invite drift between the
-normalization (request) and the runtime knob (options).
+(backend, concurrency, stream timeout) that travels with the request.
+It lives next to :class:`DownloadRequest` rather than in a separate
+``_transfer_options.py`` because the two are constructed and consumed
+together; splitting them would invite drift between the normalization
+(request) and the runtime knob (options).
 """
 
 from __future__ import annotations
@@ -31,24 +31,21 @@ from nemar._verification import VerifyPolicy
 
 DEFAULT_DATA_URL = "https://data.nemar.org/"
 DATASET_ID_RE = re.compile(r"^(nm|on)\d{6}$")
-_VALID_BACKENDS = frozenset({"auto", "aria2", "python", "datalad"})
+_VALID_BACKENDS = frozenset({"auto", "python", "datalad"})
 
 
 @dataclass(frozen=True)
 class TransferOptions:
     """Transfer-backend knobs that travel with one download request.
 
-    Bundles the four runtime values the orchestrator forwards to
-    :func:`nemar._download._transfer_files`: which backend to select,
-    how much concurrency to allow, the per-stream timeout for the
-    Python backend, and the optional wall-clock timeout for the
-    ``aria2c`` subprocess.
+    Bundles the three runtime values the orchestrator forwards to the
+    transfer phase: which backend to select, how much concurrency to
+    allow, and the per-stream timeout for the Python backend.
     """
 
     backend: str
     max_concurrent_downloads: int
     stream_timeout: float
-    aria2_timeout: float | None
 
 
 @dataclass(frozen=True)
@@ -108,7 +105,6 @@ class DownloadRequest:
         max_concurrent_downloads: int = 16,
         metadata_timeout: float = 30.0,
         stream_timeout: float = 60.0,
-        aria2_timeout: float | None = None,
         data_url: str = DEFAULT_DATA_URL,
     ) -> DownloadRequest:
         """Build a request from the public ``download()`` kwargs.
@@ -147,7 +143,6 @@ class DownloadRequest:
             backend=str(downloader),
             max_concurrent_downloads=max_concurrent_downloads,
             stream_timeout=stream_timeout,
-            aria2_timeout=aria2_timeout,
         )
         retry = RetryPolicy.default().with_attempts(max_retries)
         verify = VerifyPolicy(verify_size=verify_size, verify_hash=verify_hash)
@@ -180,7 +175,7 @@ def _validate(
         )
     if downloader not in _VALID_BACKENDS:
         raise ValueError(
-            'downloader must be one of "auto", "aria2", "python", or "datalad".'
+            'downloader must be one of "auto", "python", or "datalad".'
         )
     if max_retries < 0:
         raise ValueError("max_retries must be non-negative.")

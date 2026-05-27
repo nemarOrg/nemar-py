@@ -7,8 +7,6 @@ historically lived in different modules:
   threads — proves the python httpx.Client is thread-safe for our usage.
 * Multiple bulk download() calls back-to-back against the same fixture —
   proves the orchestrator releases all resources cleanly.
-* Mixing Python and aria2 backends in the same process — proves the
-  module-level _ARIA2_EXTRA_ARGS hook does not leak across calls.
 """
 
 from __future__ import annotations
