@@ -84,6 +84,3 @@ nemar.download(
 - **DataLad is the default first layer**; HTTPS resumes via Range/206 on any DataLad failure (missing sibling, network error, …).
 - BIDS root files (`dataset_description.json`, `participants.tsv`/`json`, `README*`, `CHANGES`, `LICENSE`) are always kept — even with `--include` / `--exclude`.
 
-## Reference implementations
-
-[`docs/reference-implementations/`](docs/reference-implementations/) holds an [openneuro-py](https://github.com/openneuro-py/openneuro-py) snapshot as a design reference. Not built, tested, or imported.
