@@ -3,7 +3,7 @@
 import pytest
 from typer.testing import CliRunner
 
-from nemar import _cli
+import nemar._cli as _cli
 from nemar._models import DatasetIndex
 
 runner = CliRunner()

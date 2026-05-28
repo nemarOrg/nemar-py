@@ -67,6 +67,13 @@ dev = [
   "hypothesis>=6.100",
   "ruff>=0.14",
   "pyright>=1.1.380",
+  # Mutation testing — full sweep over src/nemar/. Configured in
+  # [tool.mutmut] below. Run with `uv run mutmut run`.
+  "mutmut>=3.0",
+  # Network-chaos fixtures for tests/integration/test_chaos.py.
+  # Requires the ``toxiproxy-server`` binary on PATH (brew install
+  # toxiproxy) and ``NEMAR_CHAOS=1`` to actually run the tests.
+  "toxiproxy-python>=0.1",
 ]
 
 [build-system]
@@ -125,16 +132,16 @@ ignore = [
 # Modules with substantive logic (parsers, value types, retry loops). Excludes
 # pure-declaration modules (_errors.py) and large transfer-side code where
 # subprocess + network mocks dominate the runtime cost.
-paths_to_mutate = [
-  "src/nemar/_bids.py",
-  "src/nemar/_client.py",
-  "src/nemar/_endpoint.py",
-  "src/nemar/_models.py",
-  "src/nemar/_selection.py",
-  "src/nemar/_transport.py",
-]
-# mutmut expects a colon-separated string here, not a list.
-tests_dir = "tests/unit:tests/property"
+# Mutate the whole package directory. Mutmut 3.x copies only the
+# explicitly-listed files into its sandbox, which breaks imports when
+# any test depends on a submodule we did not list (and the package
+# ``__init__.py`` needs to be there too). Pointing at the package
+# itself sidesteps both issues; mutmut still skips trivially mutable
+# spots and the unit suite (which runs fast) gates each mutant.
+paths_to_mutate = ["src/nemar/"]
+# mutmut 3.x expects a list of test directories (the 2.x colon-separated
+# string form was iterated char-by-char in 3.5 and crashed pytest).
+tests_dir = ["tests/unit", "tests/property"]
 pytest_add_cli_args = [
   "-x",
   "-q",

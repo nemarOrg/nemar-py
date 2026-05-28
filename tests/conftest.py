@@ -10,6 +10,14 @@ import pytest
 from tests.fixtures.certs import LocalCa, generate_local_ca
 from tests.fixtures.https_server import NemarFakeEndpoint, start_https_server
 
+# Re-export the toxiproxy fixtures so tests opt in by name without
+# importing the module directly. ``chaos_proxy`` (per-test) depends on
+# ``_toxiproxy_server`` (session-scoped) which is the actual subprocess.
+from tests.fixtures.toxiproxy import (  # noqa: F401 — re-export for pytest
+    _toxiproxy_server,
+    chaos_proxy,
+)
+
 
 @pytest.fixture(scope="session")
 def local_ca(tmp_path_factory: pytest.TempPathFactory) -> LocalCa:
