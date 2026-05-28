@@ -472,7 +472,7 @@ def test_chain_auto_fetches_from_s3_when_available(
     """``select_backend('auto')`` resolves to a chain whose primary is S3,
     and a published S3 object lands on disk via S3 (no HTTPS hit).
     """
-    from nemar._s3 import annex_key_for
+    from nemar.s3 import annex_key_for
 
     content = b"chain via S3" * 32
     f = DatasetFile(

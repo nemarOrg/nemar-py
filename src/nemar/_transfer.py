@@ -47,7 +47,6 @@ from nemar._datalad import DataLadBackend
 from nemar._endpoint import DataEndpoint
 from nemar._models import DatasetFile
 from nemar._retry import RetryPolicy
-from nemar._s3 import S3Backend
 from nemar._verification import (
     VerifyPolicy,
     VerifyResult,
@@ -57,6 +56,7 @@ from nemar._verification import (
 )
 from nemar._verification import check as _verify_check
 from nemar.errors import DataLadError, S3Error, TransferError, VerificationError
+from nemar.s3 import S3Backend
 
 
 class _RetryableError(Exception):
@@ -219,7 +219,7 @@ def select_backend(
     ``layers.append(...)`` line, not three new branches.
 
     * ``"python"`` → bare :class:`PythonBackend`. Skip every other layer.
-    * ``"s3"`` → bare :class:`~nemar._s3.S3Backend`. No fallback. Requires
+    * ``"s3"`` → bare :class:`~nemar.s3.S3Backend`. No fallback. Requires
       ``dataset``.
     * ``"auto"`` with ``dataset`` → S3 → DataLad (when advertised) → HTTPS.
     * ``"auto"`` without ``dataset`` (bulk ``download_files`` API) →

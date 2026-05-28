@@ -22,7 +22,6 @@ import httpx
 from nemar._datalad import DataLadBackend
 from nemar._models import DatasetFile
 from nemar._retry import RetryPolicy
-from nemar._s3 import S3Backend
 from nemar._transfer import (
     LayeredBackend,
     PythonBackend,
@@ -31,6 +30,7 @@ from nemar._transfer import (
 )
 from nemar._verification import VerifyPolicy
 from nemar.errors import DataLadError, S3Error
+from nemar.s3 import S3Backend
 
 
 def _make_options(
