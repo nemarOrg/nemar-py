@@ -21,9 +21,9 @@ import socket
 import pytest
 import s3fs
 
+from nemar._backend import TransferOptions
 from nemar._models import DatasetFile
 from nemar._retry import RetryPolicy
-from nemar._transfer import TransferOptions
 from nemar._verification import VerifyPolicy
 from nemar.errors import S3Error
 from nemar.s3 import (

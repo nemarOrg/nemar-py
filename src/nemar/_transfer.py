@@ -17,7 +17,7 @@ from pathlib import Path
 
 from tqdm.auto import tqdm
 
-from nemar._backend import TransferBackend, TransferOptions, VALID_BACKENDS
+from nemar._backend import TransferBackend, TransferOptions
 from nemar._datalad import DataLadBackend
 from nemar._endpoint import DataEndpoint
 from nemar._models import DatasetFile
@@ -30,8 +30,6 @@ from nemar._verification import (
 )
 from nemar.errors import DataLadError, S3Error
 from nemar.s3 import S3Backend
-
-__all__ = ["LayeredBackend", "select_backend", "download_files", "VALID_BACKENDS", "TransferOptions", "TransferBackend"]
 
 
 class LayeredBackend:

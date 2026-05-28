@@ -63,7 +63,7 @@ if TYPE_CHECKING:
     # behind ``TYPE_CHECKING`` keeps the dependency direction one-way
     # (``_datalad`` → ``_transfer`` only for type checkers) and documents
     # that this module has no runtime coupling to the HTTPS / S3 backends.
-    from nemar._transfer import TransferOptions
+    from nemar._backend import TransferOptions
 
 
 @dataclass(frozen=True)

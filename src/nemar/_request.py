@@ -24,11 +24,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from nemar._backend import VALID_BACKENDS, TransferOptions
 from nemar._endpoint import DataEndpoint
 from nemar._models import BidsQuery
 from nemar._retry import RetryPolicy
 from nemar._selection import build_bids_query
-from nemar._transfer import VALID_BACKENDS, TransferOptions
 from nemar._verification import VerifyPolicy
 
 DEFAULT_DATA_URL = "https://data.nemar.org/"

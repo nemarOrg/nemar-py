@@ -76,8 +76,8 @@ if TYPE_CHECKING:
     # runtime would create a ``_transfer → _s3 → _transfer`` cycle.
     # :class:`~nemar._transfer.TransferBackend` is a structural Protocol,
     # so the runtime never inspects these annotations.
+    from nemar._backend import TransferOptions
     from nemar._retry import RetryPolicy
-    from nemar._transfer import TransferOptions
     from nemar._verification import VerifyPolicy
 
 NEMAR_S3_BUCKET = "nemar"

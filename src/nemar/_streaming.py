@@ -1,5 +1,4 @@
-"""The HTTPS streaming engine — one ``TransferBackend`` adapter + the
-single-file primitive.
+"""The HTTPS streaming engine — one ``TransferBackend`` adapter + primitive.
 
 This module is the bytes-on-the-wire mechanics: a thread-pooled
 ``httpx`` adapter (:class:`PythonBackend`), its per-file retry driver
