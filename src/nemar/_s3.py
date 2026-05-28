@@ -157,7 +157,20 @@ def archive_url(dataset: str, version: str) -> str:
     depending on the dataset. Useful for callers that want to mirror
     a dataset in one transfer instead of iterating the manifest. The
     ZIP is content-equivalent to a DataLad clone at the same tag.
-    Same public-read contract as :func:`version_url`.
+
+    .. note::
+
+       **Best-effort availability.** Unlike :func:`version_url` and
+       :func:`version_summary_url` (which we have seen 100 % of the
+       time across the catalog), the archive is a build artifact
+       published asynchronously after a version is cut. A random sample
+       of 40 datasets had archives present for ~92 % of versions;
+       freshly-published versions may not have one for hours or days.
+
+       Callers should ``HEAD`` the URL and fall back to iterating the
+       manifest (via :func:`nemar.download` or
+       :func:`nemar.transfer.download_files`) when the archive is not
+       yet available.
     """
     return (
         f"{NEMAR_S3_HOST}/{dataset}/archives/"
