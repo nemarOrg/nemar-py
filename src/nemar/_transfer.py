@@ -35,14 +35,13 @@ from __future__ import annotations
 import concurrent.futures
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
 
 import httpx
 from tqdm.auto import tqdm
 
 from nemar import __version__
+from nemar._backend import TransferBackend, TransferOptions, VALID_BACKENDS
 from nemar._datalad import DataLadBackend
 from nemar._endpoint import DataEndpoint
 from nemar._models import DatasetFile
@@ -77,65 +76,6 @@ class _RetryFreshError(_RetryableError):
     distinguishes it to set ``force_fresh=True`` on the next attempt
     (a one-shot recovery after HTTP 416).
     """
-
-
-VALID_BACKENDS = frozenset({"auto", "python", "datalad", "s3"})
-"""The accepted values for ``TransferOptions.backend``.
-
-Co-resident with :func:`select_backend` (the only consumer that turns
-a value here into a concrete backend) and :func:`~nemar._request._validate`
-(which imports this constant). Keeping the set and its consumers in
-one module means a new backend addition does not drift between
-validator and selector.
-"""
-
-
-@dataclass(frozen=True)
-class TransferOptions:
-    """Transfer-backend knobs that travel with one download request.
-
-    Bundles the three runtime values the orchestrator forwards to the
-    transfer phase: which backend to select, how much concurrency to
-    allow, and the per-stream timeout for the Python backend. Lives
-    next to :func:`select_backend` (the consumer that reads
-    ``.backend``) rather than under ``_request`` because every concrete
-    backend takes one of these as a parameter — co-locating it with
-    the protocol it parameterizes keeps the transfer surface
-    self-contained.
-    """
-
-    backend: str
-    max_concurrent_downloads: int
-    stream_timeout: float
-
-
-class TransferBackend(Protocol):
-    """Adapter contract for the post-selection bytes-on-the-wire phase.
-
-    Implementations receive the list of files that the pre-transfer
-    verifier already filtered (so every entry needs transfer), the
-    target directory (created by the caller), the runtime options
-    bundle, the verify policy, and the retry policy. They are
-    responsible for the network work only; the orchestrator runs
-    :func:`assert_all_present` after this returns to gate on the
-    final hash + size sweep.
-    """
-
-    def transfer(
-        self,
-        files: Sequence[DatasetFile],
-        *,
-        target_dir: Path,
-        options: TransferOptions,
-        verify: VerifyPolicy,
-        retry: RetryPolicy,
-    ) -> None:
-        """Move ``files`` into ``target_dir``.
-
-        Raises :class:`TransferError` on any irrecoverable failure. The
-        orchestrator does not catch it; it is the user-facing failure
-        path.
-        """
 
 
 class LayeredBackend:
