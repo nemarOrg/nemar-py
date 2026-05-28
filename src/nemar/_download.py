@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -31,8 +32,10 @@ from tqdm.auto import tqdm
 from nemar import __version__
 from nemar._client import NEMARClient
 from nemar._models import (
+    DatasetFile,
     DatasetIndex,
     DatasetVersion,
+    VersionManifest,
 )
 from nemar._request import (
     DEFAULT_DATA_URL,
@@ -225,41 +228,55 @@ def download(
     _run(request)
 
 
-def _run(request: DownloadRequest) -> None:
-    """Execute one normalized :class:`DownloadRequest`.
+@dataclass(frozen=True)
+class _MetadataResult:
+    """The output of the metadata-fetch phase of :func:`_run`.
 
-    The six algorithmic steps in order:
-
-    1. Fetch the dataset index.
-    2. Resolve the requested version.
-    3. Fetch the dataset metadata document (if advertised).
-    4. Fetch the version manifest payload.
-    5. Parse the manifest, select files, assert target compatibility,
-       and guard against case-insensitive-filesystem collisions.
-    6. Transfer the selected files.
+    Carries only the three values the downstream phases consume: the
+    resolved version tag, the optional DataLad sibling URL, and the
+    parsed manifest. ``index`` and ``version`` stay local to
+    :func:`_fetch_metadata`.
     """
-    data_url = request.endpoint.url
 
-    tqdm.write(f"This is nemar-py {__version__}.")
-    tqdm.write(f"Preparing to download {request.dataset} from {data_url}")
+    selected_tag: str
+    datalad_url: str | None
+    manifest: VersionManifest
 
-    # The NEMARClient owns the metadata httpx.Client for the three
-    # index/metadata/manifest fetches. The transfer phase runs after the
-    # context closes so the metadata connection pool is released before
-    # the (possibly long) file transfer phase begins.
+
+def _fetch_metadata(request: DownloadRequest) -> _MetadataResult:
+    """Fetch index → resolve version → fetch metadata + manifest.
+
+    The ``NEMARClient`` owns the metadata ``httpx.Client`` for the three
+    fetches; the transfer phase runs after the context closes so the
+    metadata connection pool is released before the (possibly long)
+    file transfer begins.
+    """
     with NEMARClient(
-        data_url=data_url,
+        data_url=request.endpoint.url,
         metadata_timeout=request.metadata_timeout,
         max_retries=request.retry.max_attempts - 1,
     ) as client:
         index = client.fetch_index(request.dataset)
         version = index.resolve_version(request.requested_tag)
-        selected_tag = version.version
-        datalad_url = index.datalad_url
         client.fetch_metadata(index)
         manifest = client.fetch_manifest(index, version)
+    return _MetadataResult(
+        selected_tag=version.version,
+        datalad_url=index.datalad_url,
+        manifest=manifest,
+    )
 
-    files = list(manifest)
+
+def _select_files_for_request(
+    request: DownloadRequest, files: list[DatasetFile]
+) -> list[DatasetFile]:
+    """Apply the BIDS query + include/exclude + ``no_data`` filter.
+
+    Raises :class:`~nemar.errors.SelectionError` (via
+    :func:`~nemar._selection.raise_if_unmatched_includes`) when an
+    include pattern matched nothing. ``no_data=True`` keeps only
+    git-tracked sidecars (drops annexed binaries).
+    """
     result = select_files(
         files,
         query=request.bids_query,
@@ -272,25 +289,33 @@ def _run(request: DownloadRequest) -> None:
         selected_files = [
             file for file in selected_files if file.git_sha1 is not None
         ]
+    return selected_files
+
+
+def _transfer_and_verify(
+    request: DownloadRequest,
+    selected_files: list[DatasetFile],
+    *,
+    datalad_url: str | None,
+    selected_tag: str,
+    manifest_count: int,
+) -> None:
+    """Guard the target, transfer the pending files, then verify all.
+
+    Local-compatibility check + case-collision guard run before any
+    bytes move. ``partition_pending`` trusts size only so an idempotent
+    re-run does not re-hash the whole dataset; the final
+    :func:`~nemar._verification.assert_all_present` is the real hash gate
+    over every selected file.
+    """
     _check_local_compatibility(
         request.target_path, dataset=request.dataset, tag=selected_tag
     )
     if _target_has_files_without_description(request.target_path):
-        # Resume-friendly behavior: a non-empty target without a
-        # ``dataset_description.json`` (e.g. a previous interrupted
-        # download) is allowed to proceed. Log it so operators can
-        # tell at a glance why no compatibility check ran.
         tqdm.write(
             "Target directory is not empty and has no dataset_description.json. "
             "Continuing so interrupted downloads can resume."
         )
-    # Refuse to start a download whose manifest entries would silently
-    # overwrite each other on a case-insensitive target filesystem
-    # (HFS+ / APFS in default mode / NTFS). Detected at transfer-prep
-    # time rather than at manifest-parse time because the answer
-    # depends on the target volume, which the parser does not know.
-    # The probe runs against the actual target volume because APFS can
-    # be either case-sensitive or case-insensitive on the same OS.
     request.target_path.mkdir(parents=True, exist_ok=True)
     collisions = detect_case_collisions(
         selected_files, target_dir=request.target_path
@@ -306,13 +331,9 @@ def _run(request: DownloadRequest) -> None:
 
     tqdm.write(
         "Retrieving "
-        f"{len(selected_files)} of {len(files)} manifest files "
+        f"{len(selected_files)} of {manifest_count} manifest files "
         f"({request.transfer.max_concurrent_downloads} concurrent downloads)."
     )
-    # Trust size pre-transfer; the post-transfer ``assert_all_present`` is
-    # the real gate that re-checks the hash on every file. Hashing every
-    # already-present file before the network does anything would re-read
-    # the entire dataset off disk on every idempotent re-run.
     pending = partition_pending(
         selected_files,
         target_dir=request.target_path,
@@ -335,16 +356,35 @@ def _run(request: DownloadRequest) -> None:
         )
     else:
         tqdm.write("All selected files already exist locally.")
-    # Final correctness sweep. Runs over the FULL manifest (not just the
-    # files we transferred) because the pre-transfer partition trusts
-    # size only. This is the real hash gate that catches a
-    # right-size-wrong-content file on disk.
     assert_all_present(
         selected_files,
         target_dir=request.target_path,
         policy=request.verify,
     )
     tqdm.write(f"Finished downloading {request.dataset} {selected_tag}.")
+
+
+def _run(request: DownloadRequest) -> None:
+    """Execute one normalized :class:`DownloadRequest` in three phases.
+
+    1-4. :func:`_fetch_metadata` — index, version, metadata, manifest.
+    5.   :func:`_select_files_for_request` — BIDS selection + ``no_data``.
+    6.   :func:`_transfer_and_verify` — target guards, transfer, verify.
+    """
+    tqdm.write(f"This is nemar-py {__version__}.")
+    tqdm.write(
+        f"Preparing to download {request.dataset} from {request.endpoint.url}"
+    )
+    meta = _fetch_metadata(request)
+    files = list(meta.manifest)
+    selected_files = _select_files_for_request(request, files)
+    _transfer_and_verify(
+        request,
+        selected_files,
+        datalad_url=meta.datalad_url,
+        selected_tag=meta.selected_tag,
+        manifest_count=len(files),
+    )
 
 
 def fetch_dataset_index(
