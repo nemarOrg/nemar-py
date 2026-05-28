@@ -4,8 +4,8 @@ The :class:`DataLadBackend` clones the dataset's DataLad repo (advertised
 by the NEMAR data endpoint as ``index.datalad_url``) and runs
 ``datalad get`` against the BIDS-selected files. Composition with the
 S3 / HTTPS layers happens in :class:`~nemar._transfer.LayeredBackend`
-(which lives next to the :class:`~nemar._transfer.TransferBackend`
-Protocol it composes); see :func:`nemar._transfer.select_backend` for
+(which composes the :class:`~nemar._backend.TransferBackend`
+Protocol); see :func:`nemar._transfer.select_backend` for
 the chain assembly.
 
 DataLad is an optional dependency. The import happens lazily through
