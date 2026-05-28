@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
-from nemar._errors import EndpointError
+from nemar.errors import EndpointError
 
 
 @dataclass(frozen=True)

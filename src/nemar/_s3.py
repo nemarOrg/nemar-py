@@ -67,8 +67,8 @@ from typing import TYPE_CHECKING
 import s3fs
 from tqdm.auto import tqdm
 
-from nemar._errors import S3Error
 from nemar._models import DatasetFile
+from nemar.errors import S3Error
 
 if TYPE_CHECKING:
     # Type-only imports — used purely for annotations on
@@ -205,7 +205,7 @@ def annex_key_for(file: DatasetFile) -> str | None:
     (``SHA256E-s<size>--<hex><suffix>``), or ``None`` when the file's
     checksum is git-tracked (``git_sha1``) or absent. ``None`` is the
     signal to short-circuit the S3 layer for this file — the caller
-    raises :class:`~nemar._errors.S3Error` so the layered wrapper sends
+    raises :class:`~nemar.errors.S3Error` so the layered wrapper sends
     the whole batch to the next layer (DataLad / HTTPS).
 
     The suffix carries the same role as in git-annex itself: it lets a
@@ -233,7 +233,7 @@ class S3Backend:
     auth, content-addressed at ``<dataset>/objects/<annex-key>``.
 
     Failure-mode contract: the **first** S3 miss aborts the whole
-    batch's S3 transfer with :class:`~nemar._errors.S3Error`. The
+    batch's S3 transfer with :class:`~nemar.errors.S3Error`. The
     layered wrapper catches it and sends the whole batch to the next
     layer (DataLad → HTTPS). Backends stay batch-atomic; per-file
     fallback granularity is intentionally out of the contract.

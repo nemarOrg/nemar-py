@@ -24,7 +24,6 @@ import httpx
 
 from nemar import __version__
 from nemar._endpoint import DataEndpoint
-from nemar._errors import DatasetIndexError, ManifestError
 from nemar._models import (
     DatasetIndex,
     DatasetVersion,
@@ -34,6 +33,7 @@ from nemar._models import (
 from nemar._request import DATASET_ID_RE, DEFAULT_DATA_URL
 from nemar._retry import RetryPolicy
 from nemar._transport import fetch_json
+from nemar.errors import DatasetIndexError, ManifestError
 
 
 class NEMARClient:

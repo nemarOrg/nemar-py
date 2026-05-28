@@ -37,8 +37,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
-from nemar._errors import VerificationError
 from nemar._models import DatasetFile
+from nemar.errors import VerificationError
 
 
 class VerifyResult(enum.Enum):

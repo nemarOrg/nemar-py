@@ -20,7 +20,6 @@ from pathlib import Path
 import httpx
 
 from nemar._datalad import DataLadBackend
-from nemar._errors import DataLadError, S3Error
 from nemar._models import DatasetFile
 from nemar._retry import RetryPolicy
 from nemar._s3 import S3Backend
@@ -31,6 +30,7 @@ from nemar._transfer import (
     select_backend,
 )
 from nemar._verification import VerifyPolicy
+from nemar.errors import DataLadError, S3Error
 
 
 def _make_options(
@@ -137,7 +137,7 @@ class TestLayeredBackendGeneralized:
     def test_fallback_on_custom_class_catches_and_proceeds(
         self, tmp_path: Path
     ) -> None:
-        from nemar._errors import S3Error
+        from nemar.errors import S3Error
 
         primary = _RecordingBackend(raises=S3Error("boom"))
         fallback = _RecordingBackend()
@@ -154,7 +154,7 @@ class TestLayeredBackendGeneralized:
         assert len(fallback.calls) == 1
 
     def test_non_matching_exception_propagates(self, tmp_path: Path) -> None:
-        from nemar._errors import DataLadError, S3Error
+        from nemar.errors import DataLadError, S3Error
 
         # Wrap a primary that raises DataLadError, but only catch S3Error.
         primary = _RecordingBackend(raises=DataLadError("not caught"))
@@ -175,7 +175,7 @@ class TestLayeredBackendGeneralized:
 
     def test_default_fallback_on_is_dataladerror(self, tmp_path: Path) -> None:
         """Default preserves the pre-S3 call sites that did not pass the kwarg."""
-        from nemar._errors import DataLadError
+        from nemar.errors import DataLadError
 
         primary = _RecordingBackend(raises=DataLadError("boom"))
         fallback = _RecordingBackend()

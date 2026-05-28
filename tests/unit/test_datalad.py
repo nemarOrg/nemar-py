@@ -34,11 +34,11 @@ import pytest
 
 from nemar import _datalad
 from nemar._datalad import DataLadBackend, _DataLadModules
-from nemar._errors import DataLadError, TransferError
 from nemar._models import DatasetFile
 from nemar._retry import RetryPolicy
 from nemar._transfer import LayeredBackend, TransferOptions
 from nemar._verification import VerifyPolicy
+from nemar.errors import DataLadError, TransferError
 
 # ---------------------------------------------------------------------------
 # Test doubles
