@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -31,8 +32,10 @@ from tqdm.auto import tqdm
 from nemar import __version__
 from nemar._client import NEMARClient
 from nemar._models import (
+    DatasetFile,
     DatasetIndex,
     DatasetVersion,
+    VersionManifest,
 )
 from nemar._request import (
     DEFAULT_DATA_URL,
@@ -223,6 +226,45 @@ def download(
         no_data=no_data,
     )
     _run(request)
+
+
+@dataclass(frozen=True)
+class _MetadataResult:
+    """The output of the metadata-fetch phase of :func:`_run`.
+
+    Carries only the three values the downstream phases consume: the
+    resolved version tag, the optional DataLad sibling URL, and the
+    parsed manifest. ``index`` and ``version`` stay local to
+    :func:`_fetch_metadata`.
+    """
+
+    selected_tag: str
+    datalad_url: str | None
+    manifest: VersionManifest
+
+
+def _fetch_metadata(request: DownloadRequest) -> _MetadataResult:
+    """Fetch index → resolve version → fetch metadata + manifest.
+
+    The ``NEMARClient`` owns the metadata ``httpx.Client`` for the three
+    fetches; the transfer phase runs after the context closes so the
+    metadata connection pool is released before the (possibly long)
+    file transfer begins.
+    """
+    with NEMARClient(
+        data_url=request.endpoint.url,
+        metadata_timeout=request.metadata_timeout,
+        max_retries=request.retry.max_attempts - 1,
+    ) as client:
+        index = client.fetch_index(request.dataset)
+        version = index.resolve_version(request.requested_tag)
+        client.fetch_metadata(index)
+        manifest = client.fetch_manifest(index, version)
+    return _MetadataResult(
+        selected_tag=version.version,
+        datalad_url=index.datalad_url,
+        manifest=manifest,
+    )
 
 
 def _run(request: DownloadRequest) -> None:

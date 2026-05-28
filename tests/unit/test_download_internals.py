@@ -701,3 +701,48 @@ def test_verify_manifest_file_errors(
             target_dir=tmp_path,
             policy=VerifyPolicy(verify_size=verify_size, verify_hash=verify_hash),
         )
+
+
+def test_fetch_metadata_returns_tag_datalad_url_and_manifest(monkeypatch):
+    """_fetch_metadata threads index → version → manifest into one result."""
+    from nemar import _download
+    from nemar._download import _fetch_metadata, _MetadataResult
+    from nemar._request import DownloadRequest
+
+    request = DownloadRequest.from_kwargs(
+        dataset="nm000132", data_url="https://data.nemar.org/"
+    )
+
+    class _Version:
+        version = "v1.0.0"
+
+    class _FakeIndex:
+        datalad_url = "https://example/ds.git"
+
+        def resolve_version(self, tag):
+            return _Version()
+
+    class _FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def fetch_index(self, dataset):
+            assert dataset == "nm000132"
+            return _FakeIndex()
+
+        def fetch_metadata(self, index):
+            return None
+
+        def fetch_manifest(self, index, version):
+            return "MANIFEST_SENTINEL"
+
+    monkeypatch.setattr(_download, "NEMARClient", lambda **kw: _FakeClient())
+
+    result = _fetch_metadata(request)
+    assert isinstance(result, _MetadataResult)
+    assert result.selected_tag == "v1.0.0"
+    assert result.datalad_url == "https://example/ds.git"
+    assert result.manifest == "MANIFEST_SENTINEL"
