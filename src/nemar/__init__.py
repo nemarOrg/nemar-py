@@ -1,8 +1,8 @@
 """A lightweight client for accessing NEMAR datasets."""
 
+from nemar._bids import BidsQuery
 from nemar._client import NEMARClient
 from nemar._download import download, fetch_dataset_index, list_dataset_versions
-from nemar._models import BidsQuery
 from nemar._streaming import download_one
 from nemar._transfer import download_files
 from nemar._verification import VerifyPolicy

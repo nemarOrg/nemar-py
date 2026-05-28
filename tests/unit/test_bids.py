@@ -10,9 +10,7 @@ each from its real home.
 
 import pytest
 
-from nemar._models import BidsPath
-from nemar._request import build_bids_query
-from nemar._selection import _path_matches
+from nemar._bids import BidsPath, _path_matches, build_bids_query
 
 
 @pytest.mark.parametrize(

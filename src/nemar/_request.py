@@ -8,13 +8,10 @@ normalized version tag, resolved target path, BIDS query, and the
 transfer / verify / retry policies. The orchestrator becomes a thin
 algorithm of six step calls in order against a single ``request`` value.
 
-This module also owns BIDS-query *construction* (:func:`build_bids_query`
-and its kwargs-normalization helpers): turning the raw ``subject=`` /
-``task=`` / ``entity=`` kwargs into a frozen :class:`~nemar._models.BidsQuery`
-is part of the same normalization pass as the rest of ``from_kwargs``.
-The query *type* lives in :mod:`nemar._models` and its *matching* against
-paths lives in :mod:`nemar._selection`; only the build step is here, next
-to its sole caller.
+The BIDS query is built by :func:`nemar._bids.build_bids_query`, called
+from :meth:`from_kwargs`. The whole BIDS concept (the query type, its
+builder, its parser, its matcher) lives in :mod:`nemar._bids`; this
+module only invokes the builder as one step of the normalization pass.
 """
 
 from __future__ import annotations
@@ -25,9 +22,9 @@ from pathlib import Path
 from typing import Any
 
 from nemar._backend import VALID_BACKENDS, TransferOptions
+from nemar._bids import BidsQuery, build_bids_query
 from nemar._constants import DATASET_ID_RE, DEFAULT_DATA_URL
 from nemar._endpoint import DataEndpoint
-from nemar._models import DATASET_SCOPES, BidsQuery, normalize_entity_key
 from nemar._retry import RetryPolicy
 from nemar._verification import VerifyPolicy
 
@@ -188,128 +185,3 @@ def _normalize_patterns(patterns: Iterable[str] | None) -> tuple[str, ...]:
     if isinstance(patterns, str):
         return (patterns,)
     return tuple(patterns)
-
-
-def build_bids_query(
-    *,
-    subject: str | Iterable[str] | None = None,
-    session: str | Iterable[str] | None = None,
-    task: str | Iterable[str] | None = None,
-    run: str | Iterable[str] | None = None,
-    acquisition: str | Iterable[str] | None = None,
-    datatype: str | Iterable[str] | None = None,
-    suffix: str | Iterable[str] | None = None,
-    extension: str | Iterable[str] | None = None,
-    scope: str | Iterable[str] | None = None,
-    pipeline: str | Iterable[str] | None = None,
-    entity: Mapping[str, Any] | Iterable[str] | None = None,
-) -> BidsQuery:
-    """Build a :class:`BidsQuery` from common BIDS filters and generic entities.
-
-    The sole caller is :meth:`DownloadRequest.from_kwargs`, so the
-    raw-kwargs → normalized-tuples transformation lives here next to it.
-    The query *type* lives in :mod:`nemar._models`; *matching* a parsed
-    path against the query lives in :mod:`nemar._selection`.
-    """
-    entities = _normalize_entity_mapping(entity)
-    _add_entity_filter(entities, "sub", subject)
-    _add_entity_filter(entities, "ses", session)
-    _add_entity_filter(entities, "task", task)
-    _add_entity_filter(entities, "run", run)
-    _add_entity_filter(entities, "acq", acquisition)
-
-    # Default to ``raw`` scope when none is supplied. Without this,
-    # a subject/session query would also match files under
-    # ``derivatives/<pipeline>/sub-X/...`` because the BIDS subject
-    # entity appears in both the raw tree and any subject-scoped
-    # derivative — surprising over-fetch (we've seen 260 MB of
-    # epoched derivatives sneak in on a sub-02 query against
-    # nm000133). The explicit choices are unchanged: callers who
-    # want a derivative pipeline, stimuli, sourcedata, or code pass
-    # ``scope=`` directly (e.g. ``scope="derivatives", pipeline=...``).
-    if scope is None:
-        scope = "raw"
-    return BidsQuery(
-        entities=entities,
-        datatypes=_normalize_values(datatype),
-        suffixes=_normalize_values(suffix),
-        extensions=tuple(
-            _normalize_extension(v) for v in _normalize_values(extension)
-        ),
-        scopes=_normalize_scopes(scope),
-        pipelines=_normalize_values(pipeline),
-    )
-
-
-def _normalize_entity_mapping(
-    entity: Mapping[str, Any] | Iterable[str] | None,
-) -> dict[str, tuple[str, ...]]:
-    if entity is None:
-        return {}
-    if isinstance(entity, Mapping):
-        return {
-            normalize_entity_key(key): _normalize_entity_values(key, value)
-            for key, value in entity.items()
-        }
-
-    out: dict[str, tuple[str, ...]] = {}
-    for item in entity:
-        if "=" not in item:
-            raise ValueError(
-                f'BIDS entity filters must use "key=value" syntax, got {item!r}.'
-            )
-        key, value = item.split("=", 1)
-        if not key or not value:
-            raise ValueError(
-                f'BIDS entity filters must use "key=value" syntax, got {item!r}.'
-            )
-        out[normalize_entity_key(key)] = _normalize_entity_values(key, value)
-    return out
-
-
-def _add_entity_filter(
-    entities: dict[str, tuple[str, ...]],
-    key: str,
-    value: str | Iterable[str] | None,
-) -> None:
-    values = _normalize_entity_values(key, value)
-    if values:
-        entities[key] = values
-
-
-def _normalize_entity_values(key: str, values: Any) -> tuple[str, ...]:
-    normalized_key = normalize_entity_key(key)
-    out = []
-    for value in _normalize_values(values):
-        prefix = f"{normalized_key}-"
-        out.append(value.removeprefix(prefix))
-    return tuple(out)
-
-
-def _normalize_values(values: Any) -> tuple[str, ...]:
-    if values is None:
-        return ()
-    if isinstance(values, str):
-        return (values,)
-    if not isinstance(values, Iterable):
-        return (str(values),)
-    return tuple(str(value) for value in values)
-
-
-def _normalize_extension(value: str) -> str:
-    value = value.lower()
-    if not value.startswith("."):
-        value = "." + value
-    return value
-
-
-def _normalize_scopes(values: Any) -> tuple[str, ...]:
-    scopes = tuple(value.lower() for value in _normalize_values(values))
-    invalid = sorted(set(scopes) - DATASET_SCOPES)
-    if invalid:
-        expected = ", ".join(sorted(DATASET_SCOPES))
-        raise ValueError(
-            "Unknown BIDS dataset scope(s): "
-            f"{', '.join(invalid)}. Expected one of: {expected}."
-        )
-    return scopes
