@@ -16,8 +16,9 @@ import pytest
 from nemar._download import _check_local_compatibility
 from nemar._endpoint import DataEndpoint
 from nemar._models import DatasetFile, VersionManifest, parse_dataset_index
+from nemar._request import build_bids_query
 from nemar._retry import RetryPolicy
-from nemar._selection import build_bids_query, select_files
+from nemar._selection import select_files
 from nemar._transport import fetch_json
 from nemar._verification import VerifyPolicy, assert_all_present
 from nemar.errors import (

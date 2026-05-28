@@ -22,7 +22,7 @@ from typing import Any
 
 import httpx
 
-from nemar import __version__
+from nemar._constants import DATASET_ID_RE, DEFAULT_DATA_URL
 from nemar._endpoint import DataEndpoint
 from nemar._models import (
     DatasetIndex,
@@ -30,9 +30,9 @@ from nemar._models import (
     VersionManifest,
     parse_dataset_index,
 )
-from nemar._request import DATASET_ID_RE, DEFAULT_DATA_URL
 from nemar._retry import RetryPolicy
 from nemar._transport import fetch_json
+from nemar._version import __version__
 from nemar.errors import DatasetIndexError, ManifestError
 
 

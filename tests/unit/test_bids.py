@@ -1,16 +1,18 @@
 """Tests for BIDS-aware query parsing.
 
 The value types (:class:`BidsPath`, :class:`BidsQuery`) live in
-:mod:`nemar._models`; the operations that build a query from raw kwargs
-(:func:`build_bids_query`) and match a parsed path against a query
-(:func:`_path_matches`) live in :mod:`nemar._selection`, next to their
-consumer. Tests import each from its real home.
+:mod:`nemar._models`; building a query from raw kwargs
+(:func:`build_bids_query`) is request normalization and lives in
+:mod:`nemar._request`; matching a parsed path against a query
+(:func:`_path_matches`) lives in :mod:`nemar._selection`. Tests import
+each from its real home.
 """
 
 import pytest
 
 from nemar._models import BidsPath
-from nemar._selection import _path_matches, build_bids_query
+from nemar._request import build_bids_query
+from nemar._selection import _path_matches
 
 
 @pytest.mark.parametrize(

@@ -7,6 +7,7 @@ from typing import Annotated, Any
 import typer
 
 import nemar
+from nemar._constants import DEFAULT_DATA_URL
 from nemar._download import download, fetch_dataset_index
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
@@ -354,7 +355,7 @@ def download_cli(
             "--data-url",
             help="NEMAR data origin. Must stay on data.nemar.org by default.",
         ),
-    ] = "https://data.nemar.org/",
+    ] = DEFAULT_DATA_URL,
 ) -> None:
     """Download datasets from the public NEMAR data endpoint."""
     bids_filters = _BidsFilterArgs(
@@ -420,7 +421,7 @@ def versions_cli(
             "--data-url",
             help="NEMAR data origin. Must stay on data.nemar.org by default.",
         ),
-    ] = "https://data.nemar.org/",
+    ] = DEFAULT_DATA_URL,
     max_retries: Annotated[
         int,
         typer.Option(help="Retry count for the dataset index request."),

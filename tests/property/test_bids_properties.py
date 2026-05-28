@@ -8,7 +8,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from nemar._models import DATASET_SCOPES, BidsPath
-from nemar._selection import build_bids_query
+from nemar._request import build_bids_query
 
 label_chars = string.ascii_lowercase + string.digits
 labels = st.text(alphabet=label_chars, min_size=1, max_size=8)

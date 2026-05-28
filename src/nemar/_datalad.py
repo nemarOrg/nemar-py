@@ -19,19 +19,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+from nemar._backend import TransferOptions
 from nemar._models import DatasetFile
 from nemar._retry import RetryPolicy
 from nemar._verification import VerifyPolicy
 from nemar.errors import DataLadError
-
-if TYPE_CHECKING:
-    # ``TransferOptions`` is used only as a type annotation. Guarding it
-    # behind ``TYPE_CHECKING`` keeps the dependency direction one-way
-    # (``_datalad`` → ``_transfer`` only for type checkers) and documents
-    # that this module has no runtime coupling to the HTTPS / S3 backends.
-    from nemar._backend import TransferOptions
 
 
 @dataclass(frozen=True)

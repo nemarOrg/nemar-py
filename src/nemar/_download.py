@@ -29,8 +29,8 @@ from typing import Any
 
 from tqdm.auto import tqdm
 
-from nemar import __version__
 from nemar._client import NEMARClient
+from nemar._constants import DEFAULT_DATA_URL
 from nemar._models import (
     DatasetFile,
     DatasetIndex,
@@ -38,7 +38,6 @@ from nemar._models import (
     VersionManifest,
 )
 from nemar._request import (
-    DEFAULT_DATA_URL,
     DownloadRequest,
     _normalize_version_tag,
 )
@@ -49,6 +48,7 @@ from nemar._verification import (
     detect_case_collisions,
     partition_pending,
 )
+from nemar._version import __version__
 from nemar.errors import (
     LocalTargetError,
     LocalVersionMismatchError,

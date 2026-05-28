@@ -62,23 +62,15 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING
 
 import s3fs
 from tqdm.auto import tqdm
 
+from nemar._backend import TransferOptions
 from nemar._models import DatasetFile
+from nemar._retry import RetryPolicy
+from nemar._verification import VerifyPolicy
 from nemar.errors import S3Error
-
-if TYPE_CHECKING:
-    # Type-only imports — used purely for annotations on
-    # :meth:`S3Backend.transfer`. Pulling :class:`TransferOptions` at
-    # runtime would create a ``_transfer → _s3 → _transfer`` cycle.
-    # :class:`~nemar._backend.TransferBackend` is a structural Protocol,
-    # so the runtime never inspects these annotations.
-    from nemar._backend import TransferOptions
-    from nemar._retry import RetryPolicy
-    from nemar._verification import VerifyPolicy
 
 NEMAR_S3_BUCKET = "nemar"
 NEMAR_S3_REGION = "us-east-2"

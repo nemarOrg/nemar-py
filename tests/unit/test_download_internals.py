@@ -9,9 +9,8 @@ import pytest
 from nemar import _download, fetch_dataset_index
 from nemar._download import download
 from nemar._models import BidsQuery, DatasetFile
-from nemar._request import DownloadRequest
+from nemar._request import DownloadRequest, build_bids_query
 from nemar._selection import (
-    build_bids_query,
     raise_if_unmatched_includes,
     select_files,
 )

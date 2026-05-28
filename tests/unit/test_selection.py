@@ -3,9 +3,9 @@
 import pytest
 
 from nemar._models import BidsQuery, DatasetFile
+from nemar._request import build_bids_query
 from nemar._selection import (
     SelectionResult,
-    build_bids_query,
     raise_if_unmatched_includes,
     select_files,
 )

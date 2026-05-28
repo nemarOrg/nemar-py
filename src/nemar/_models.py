@@ -456,9 +456,10 @@ class BidsQuery:
     Pure value type: a frozen bundle of normalized filter tuples plus
     two read-only helpers (:meth:`is_empty`, :meth:`describe`). The
     builder that turns raw kwargs into a ``BidsQuery``
-    (``build_bids_query``) lives in :mod:`nemar._selection` because
-    that's where its consumers live, and matching against a
-    :class:`BidsPath` is also a selection-time operation there.
+    (``build_bids_query``) lives in :mod:`nemar._request` next to its
+    sole caller (``DownloadRequest.from_kwargs``); matching a parsed
+    :class:`BidsPath` against a query is a selection-time operation in
+    :mod:`nemar._selection`.
     """
 
     entities: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
@@ -502,7 +503,7 @@ def normalize_entity_key(key: str) -> str:
 
     Module-public (no leading underscore) because both
     :class:`BidsPath.parse` here and the ``build_bids_query`` builder in
-    :mod:`nemar._selection` need it. Keeping a single source of truth
+    :mod:`nemar._request` need it. Keeping a single source of truth
     for the alias table avoids drift between the parse side and the
     query-construction side.
     """

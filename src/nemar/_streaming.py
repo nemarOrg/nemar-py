@@ -30,7 +30,6 @@ from pathlib import Path
 import httpx
 from tqdm.auto import tqdm
 
-from nemar import __version__
 from nemar._backend import TransferOptions
 from nemar._endpoint import DataEndpoint
 from nemar._models import DatasetFile
@@ -41,6 +40,7 @@ from nemar._verification import (
     _describe_failure,
 )
 from nemar._verification import check as _verify_check
+from nemar._version import __version__
 from nemar.errors import TransferError, VerificationError
 
 

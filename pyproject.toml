@@ -100,7 +100,7 @@ build-backend = "setuptools.build_meta"
 # literal out of the AST without importing the package), so bumping the
 # release is a one-line edit to that constant.
 [tool.setuptools.dynamic]
-version = { attr = "nemar.__version__" }
+version = { attr = "nemar._version.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

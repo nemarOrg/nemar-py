@@ -46,7 +46,7 @@ class LayeredBackend:
 
     Construction is policy-driven by :func:`select_backend` and not
     part of the public seam — callers configure the policy via
-    :class:`~nemar._request.TransferOptions` and the index's
+    :class:`~nemar._backend.TransferOptions` and the index's
     ``datalad_url``, not by building this wrapper directly.
 
     The default ``fallback_on=(DataLadError,)`` preserves the
