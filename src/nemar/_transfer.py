@@ -440,7 +440,7 @@ def download_one(
         must share the endpoint's scheme + netloc; otherwise
         :class:`~nemar.errors.EndpointError` is raised before any
         bytes are fetched. Files produced by
-        :meth:`~nemar.models.VersionManifest.parse` are already origin-scoped;
+        :meth:`~nemar._models.VersionManifest.parse` are already origin-scoped;
         passing ``endpoint`` here is the right move for callers that
         hand-build a :class:`DatasetFile` from untrusted input.
     stream_timeout
@@ -504,7 +504,7 @@ def download_files(
 
     The bulk variant of :func:`download_one`. Callers that already have
     their own selection logic (e.g., eegdash composing a custom file
-    list from a parsed :class:`~nemar.models.VersionManifest`) reach for
+    list from a parsed :class:`~nemar._models.VersionManifest`) reach for
     this primitive instead of the full :func:`nemar.download`
     orchestrator: there is no dataset index, no metadata fetch, no BIDS
     query — only the bytes-on-the-wire phase plus the verify gates.
@@ -539,14 +539,14 @@ def download_files(
     retry
         Per-file retry policy. Defaults to :meth:`RetryPolicy.default`.
     endpoint
-        Optional :class:`~nemar.models.DataEndpoint` used to enforce
+        Optional :class:`~nemar._endpoint.DataEndpoint` used to enforce
         origin scoping. When supplied, every file's ``url`` must share
         the endpoint's scheme + netloc; otherwise
         :class:`~nemar.errors.EndpointError` is raised before any
         bytes move. When ``None`` (default) no origin check runs —
         matches :func:`download_one`'s default and trusts the caller's
         own scoping (typically inherited from
-        :meth:`~nemar.models.VersionManifest.parse`).
+        :meth:`~nemar._models.VersionManifest.parse`).
 
     Raises
     ------

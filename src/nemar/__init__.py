@@ -7,14 +7,14 @@ Anything else lives under a clearly-named submodule:
 * :mod:`nemar.errors` — the full typed error hierarchy. Everything is a
   subclass of :class:`NemarError` (which is also re-exported here), so
   the catch-all idiom ``except nemar.NemarError`` still works.
-* :mod:`nemar.models` — :class:`~nemar.models.VersionManifest` and
-  :class:`~nemar.models.DataEndpoint` for callers that parse or
-  construct these value types directly.
-* :mod:`nemar.config` — :class:`~nemar.config.DownloadRequest`,
-  :class:`~nemar.config.TransferOptions`,
-  :class:`~nemar.config.VerifyResult` — request/policy escape hatches.
-* :mod:`nemar.transfer` — :func:`~nemar.transfer.download_one`, the
-  single-file transfer primitive.
+* :mod:`nemar.transfer` — :func:`~nemar.transfer.download_one` /
+  :func:`~nemar.transfer.download_files`, the per-file and bulk
+  transfer primitives that external clients (eegdash, custom
+  selectors) compose on top of a parsed manifest.
+* :mod:`nemar.s3` — the documented NEMAR S3 contract: bucket constants
+  plus URL helpers (:func:`~nemar.s3.s3_object_url`,
+  :func:`~nemar.s3.version_url`, :func:`~nemar.s3.archive_url`) for
+  callers that want to bypass the catalog endpoint.
 """
 
 from importlib import metadata as _metadata
