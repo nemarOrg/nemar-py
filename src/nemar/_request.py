@@ -77,6 +77,7 @@ class DownloadRequest:
     retry: RetryPolicy
     verify: VerifyPolicy
     metadata_timeout: float
+    no_data: bool
 
     @classmethod
     def from_kwargs(
@@ -106,6 +107,7 @@ class DownloadRequest:
         metadata_timeout: float = 30.0,
         stream_timeout: float = 60.0,
         data_url: str = DEFAULT_DATA_URL,
+        no_data: bool = False,
     ) -> DownloadRequest:
         """Build a request from the public ``download()`` kwargs.
 
@@ -159,6 +161,7 @@ class DownloadRequest:
             retry=retry,
             verify=verify,
             metadata_timeout=metadata_timeout,
+            no_data=no_data,
         )
 
 

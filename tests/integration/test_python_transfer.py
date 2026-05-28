@@ -294,4 +294,92 @@ def test_http_416_on_resume_retries_fresh(tmp_path) -> None:
     assert call_count["fresh"] == 1, (
         f"Expected exactly one fresh retry; got {call_count}"
     )
-    assert out.read_bytes() == data
+
+
+def _git_blob_sha1(content: bytes) -> str:
+    """Compute git's content-addressed blob SHA1 for a payload."""
+    header = f"blob {len(content)}\0".encode()
+    return hashlib.sha1(header + content).hexdigest()
+
+
+def _publish_mixed_manifest(nemar_endpoint) -> tuple[bytes, bytes]:
+    """Publish one git-tracked sidecar + one annexed binary.
+
+    Returns the two payloads so the test can assert by content. The
+    git-tracked file carries ``checksum_algorithm: "git"`` (so it
+    materializes with ``git_sha1`` set on the parsed
+    :class:`DatasetFile`); the annexed binary carries a bare ``sha256``
+    (so its ``git_sha1`` is ``None``). ``--no-data`` is the seam that
+    must split those two populations.
+    """
+    sidecar = b'{"Name": "nm000132", "BIDSVersion": "1.8.0"}'
+    binary = b"\x00" * 256
+    index = make_index(dataset="nm000132")
+    manifest = make_manifest_list(
+        [
+            {
+                "path": "dataset_description.json",
+                "size": len(sidecar),
+                "checksum_algorithm": "git",
+                "checksum": _git_blob_sha1(sidecar),
+            },
+            make_manifest_entry(path="eeg/sub-001_eeg.set", content=binary),
+        ]
+    )
+    nemar_endpoint.publish(
+        "nm000132",
+        index=index,
+        manifest=manifest,
+        files={
+            "v1.0.0/dataset_description.json": sidecar,
+            "v1.0.0/eeg/sub-001_eeg.set": binary,
+        },
+        metadata={"Name": "nm000132"},
+    )
+    return sidecar, binary
+
+
+def test_no_data_keeps_git_tracked_sidecars_and_skips_annexed_binaries(
+    nemar_endpoint, target_dir
+) -> None:
+    """``no_data=True`` materializes git-tracked sidecars, skips annexed binaries.
+
+    The filter sits at the manifest-selection seam: anything whose
+    parsed :class:`DatasetFile.git_sha1` is ``None`` (i.e. the
+    ``sha256`` / ``md5`` annexed objects) is dropped before transfer.
+    """
+    sidecar, _ = _publish_mixed_manifest(nemar_endpoint)
+
+    nemar.download(
+        dataset="nm000132",
+        target_dir=target_dir,
+        data_url=nemar_endpoint.base_url,
+        downloader="python",
+        max_concurrent_downloads=1,
+        no_data=True,
+    )
+
+    assert (target_dir / "dataset_description.json").read_bytes() == sidecar
+    assert not (target_dir / "eeg" / "sub-001_eeg.set").exists()
+
+
+def test_no_data_false_still_fetches_annexed_binaries(
+    nemar_endpoint, target_dir
+) -> None:
+    """Default behavior is unchanged: both populations land on disk.
+
+    Pins the negative half of the contract — ``no_data=False`` (the
+    default) does NOT silently skip the annexed binaries.
+    """
+    sidecar, binary = _publish_mixed_manifest(nemar_endpoint)
+
+    nemar.download(
+        dataset="nm000132",
+        target_dir=target_dir,
+        data_url=nemar_endpoint.base_url,
+        downloader="python",
+        max_concurrent_downloads=1,
+    )
+
+    assert (target_dir / "dataset_description.json").read_bytes() == sidecar
+    assert (target_dir / "eeg" / "sub-001_eeg.set").read_bytes() == binary

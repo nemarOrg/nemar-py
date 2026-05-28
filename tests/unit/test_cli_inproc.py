@@ -104,7 +104,6 @@ def test_cli_download_passes_bids_filters(monkeypatch, extra_args, expected) -> 
         _cli.app,
         [
             "download",
-            "--dataset",
             "nm000132",
             "--tag",
             "latest",
@@ -132,13 +131,13 @@ def test_cli_download_passes_bids_filters(monkeypatch, extra_args, expected) -> 
     ("command", "patch_name", "message"),
     [
         pytest.param(
-            ["download", "--dataset", "nm000132"],
+            ["download", "nm000132"],
             "download",
             "manifest missing",
             id="download-error",
         ),
         pytest.param(
-            ["versions", "--dataset", "bad"],
+            ["versions", "bad"],
             "fetch_dataset_index",
             "bad dataset",
             id="versions-error",
@@ -163,12 +162,12 @@ def test_cli_reports_errors(monkeypatch, command, patch_name, message) -> None:
     ("args", "expected_stdout"),
     [
         pytest.param(
-            ["versions", "--dataset", "nm000132"],
+            ["versions", "nm000132"],
             ["nm000132 latest: v1.1.1", "v1.1.1 (latest)", "v1.0.0"],
             id="table",
         ),
         pytest.param(
-            ["versions", "--dataset", "nm000132", "--json"],
+            ["versions", "nm000132", "--json"],
             ['"dataset_id": "nm000132"', '"latest": "v1.1.1"'],
             id="json",
         ),
@@ -191,3 +190,94 @@ def test_cli_version_callback() -> None:
 
     assert result.exit_code == 0
     assert "nemar-py" in result.stdout
+
+
+def test_cli_no_data_forwards_flag(monkeypatch) -> None:
+    """``--no-data`` reaches ``download(...)`` as ``no_data=True``."""
+    seen: dict = {}
+    monkeypatch.setattr(_cli, "download", lambda **kwargs: seen.update(kwargs))
+
+    result = runner.invoke(_cli.app, ["download", "nm000132", "--no-data"])
+
+    assert result.exit_code == 0, result.stderr
+    assert seen["no_data"] is True
+
+
+def test_cli_stimuli_and_derivatives_merge_with_default_scope(monkeypatch) -> None:
+    """Convenience flags expand to ``scope=['raw', 'stimuli', 'derivatives']``."""
+    seen: dict = {}
+    monkeypatch.setattr(_cli, "download", lambda **kwargs: seen.update(kwargs))
+
+    result = runner.invoke(
+        _cli.app, ["download", "nm000132", "--stimuli", "--derivatives"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert seen["scope"] == ["raw", "stimuli", "derivatives"]
+
+
+def test_cli_explicit_scope_wins_over_convenience_flags(monkeypatch) -> None:
+    """An explicit ``--scope`` is the contract; convenience flags step aside."""
+    seen: dict = {}
+    monkeypatch.setattr(_cli, "download", lambda **kwargs: seen.update(kwargs))
+
+    result = runner.invoke(
+        _cli.app,
+        [
+            "download",
+            "nm000132",
+            "--scope",
+            "derivatives",
+            "--stimuli",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert seen["scope"] == ["derivatives"]
+
+
+def test_cli_metadata_timeout_forwards(monkeypatch) -> None:
+    """``--metadata-timeout`` reaches ``download(...)``."""
+    seen: dict = {}
+    monkeypatch.setattr(_cli, "download", lambda **kwargs: seen.update(kwargs))
+
+    result = runner.invoke(
+        _cli.app,
+        ["download", "nm000132", "--metadata-timeout", "12.5"],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert seen["metadata_timeout"] == 12.5
+
+
+def test_cli_output_alias_for_target_dir(monkeypatch) -> None:
+    """``-o`` is a shorthand for ``--output`` / ``--target-dir``."""
+    seen: dict = {}
+    monkeypatch.setattr(_cli, "download", lambda **kwargs: seen.update(kwargs))
+
+    result = runner.invoke(_cli.app, ["download", "nm000132", "-o", "data"])
+
+    assert result.exit_code == 0, result.stderr
+    assert seen["target_dir"].as_posix() == "data"
+
+
+def test_cli_jobs_alias_for_max_concurrent_downloads(monkeypatch) -> None:
+    """``-j`` is a shorthand for ``--max-concurrent-downloads``."""
+    seen: dict = {}
+    monkeypatch.setattr(_cli, "download", lambda **kwargs: seen.update(kwargs))
+
+    result = runner.invoke(_cli.app, ["download", "nm000132", "-j", "4"])
+
+    assert result.exit_code == 0, result.stderr
+    assert seen["max_concurrent_downloads"] == 4
+
+
+def test_cli_verbose_prints_resolved_params(monkeypatch) -> None:
+    """``--verbose`` echoes a parameter summary to stderr before starting."""
+    monkeypatch.setattr(_cli, "download", lambda **kwargs: None)
+
+    result = runner.invoke(_cli.app, ["download", "nm000132", "--verbose"])
+
+    assert result.exit_code == 0, result.stderr
+    assert "nemar-py download parameters" in result.stderr
+    assert "dataset           = nm000132" in result.stderr

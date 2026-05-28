@@ -6,7 +6,7 @@ endpoint.
 ## Usage
 
 ```shell
-nemar-py download --dataset nm000132 --target-dir data/nm000132
+nemar-py download nm000132 -o data/nm000132
 ```
 
 The downloader starts from:
@@ -21,7 +21,7 @@ does not use authentication and does not fall back to S3.
 To inspect the versions already advertised by NEMAR:
 
 ```shell
-nemar-py versions --dataset nm000132
+nemar-py versions nm000132
 ```
 
 `--tag latest` resolves through the endpoint's `latest` field, and explicit
@@ -40,8 +40,8 @@ pip install nemar-py[datalad]
 Pick the backend explicitly if you need to:
 
 ```shell
-nemar-py download --dataset nm000132 --downloader datalad   # DataLad, HTTPS fallback
-nemar-py download --dataset nm000132 --downloader python    # HTTPS only (built-in)
+nemar-py download nm000132 --downloader datalad   # DataLad, HTTPS fallback
+nemar-py download nm000132 --downloader python    # HTTPS only (built-in)
 ```
 
 `--downloader datalad` still falls back to HTTPS when the dataset index does
@@ -49,7 +49,7 @@ not advertise a DataLad URL or when DataLad fails for any reason — the
 two-layer model is the steady-state contract.
 
 ```shell
-nemar-py download --dataset nm000132 \
+nemar-py download nm000132 \
                   --tag v1.1.1 \
                   --subject 001 \
                   --task MMN \
@@ -67,13 +67,16 @@ Dataset-level BIDS folders are selected with `--scope`:
 
 ```shell
 # Download stimuli for one task
-nemar-py download --dataset nm000132 --scope stimuli --task MMN
+nemar-py download nm000132 --stimuli --task MMN
 
 # Download derivatives from one pipeline
-nemar-py download --dataset nm000132 \
-                  --scope derivatives \
+nemar-py download nm000132 \
+                  --derivatives \
                   --pipeline eeglab \
                   --subject 001
+
+# Metadata-only: fetch sidecars without the big recording binaries
+nemar-py download nm000132 --no-data -o nm000132-metadata
 ```
 
 `--include` and `--exclude` remain available as path-level refinements. When

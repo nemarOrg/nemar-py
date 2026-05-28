@@ -56,13 +56,66 @@ class _BidsFilterArgs:
         }
 
 
+def _merge_scopes(
+    explicit: list[str] | None,
+    *,
+    stimuli: bool,
+    derivatives: bool,
+) -> list[str] | None:
+    """Combine explicit ``--scope`` with ``--stimuli`` / ``--derivatives``.
+
+    If the caller passed ``--scope`` explicitly we honor it untouched
+    (their list is the contract). Otherwise we keep the orchestrator's
+    default of ``raw`` and additionally include ``stimuli`` and/or
+    ``derivatives`` when their convenience flags are set.
+    """
+    if explicit:
+        return explicit
+    if not (stimuli or derivatives):
+        return None
+    scopes = ["raw"]
+    if stimuli:
+        scopes.append("stimuli")
+    if derivatives:
+        scopes.append("derivatives")
+    return scopes
+
+
+def _print_resolved_params(
+    *,
+    dataset: str,
+    tag: str | None,
+    target_dir: Path | None,
+    bids_filters: _BidsFilterArgs,
+    downloader: str,
+    max_concurrent_downloads: int,
+    metadata_timeout: float,
+    no_data: bool,
+    data_url: str,
+) -> None:
+    """Echo the resolved download knobs to stderr before starting work."""
+    typer.secho("nemar-py download parameters:", err=True, bold=True)
+    typer.secho(f"  dataset           = {dataset}", err=True)
+    typer.secho(f"  tag               = {tag or 'latest'}", err=True)
+    typer.secho(f"  target_dir        = {target_dir or dataset}", err=True)
+    typer.secho(f"  scope             = {bids_filters.scope or '[raw]'}", err=True)
+    typer.secho(f"  subject           = {bids_filters.subject}", err=True)
+    typer.secho(f"  task              = {bids_filters.task}", err=True)
+    typer.secho(f"  include           = {bids_filters.include}", err=True)
+    typer.secho(f"  exclude           = {bids_filters.exclude}", err=True)
+    typer.secho(f"  downloader        = {downloader}", err=True)
+    typer.secho(f"  jobs              = {max_concurrent_downloads}", err=True)
+    typer.secho(f"  metadata_timeout  = {metadata_timeout}s", err=True)
+    typer.secho(f"  no_data           = {no_data}", err=True)
+    typer.secho(f"  data_url          = {data_url}", err=True)
+
+
 @app.command(name="download")
 def download_cli(
     dataset: Annotated[
         str,
-        typer.Option(
-            "--dataset",
-            "-d",
+        typer.Argument(
+            metavar="DATASET",
             help="The NEMAR dataset identifier, for example nm000132.",
         ),
     ],
@@ -78,8 +131,13 @@ def download_cli(
     target_dir: Annotated[
         Path | None,
         typer.Option(
+            "--output",
+            "-o",
             "--target-dir",
-            help="The directory to download to.",
+            help=(
+                "The directory to download to. Defaults to the dataset id "
+                "under the current working directory."
+            ),
             show_default=False,
         ),
     ] = None,
@@ -220,8 +278,63 @@ def download_cli(
     ] = 5,
     max_concurrent_downloads: Annotated[
         int,
-        typer.Option(min=1, help="Maximum parallel downloads."),
+        typer.Option(
+            "--jobs",
+            "-j",
+            "--max-concurrent-downloads",
+            min=1,
+            help="Maximum parallel downloads.",
+        ),
     ] = 16,
+    metadata_timeout: Annotated[
+        float,
+        typer.Option(
+            "--metadata-timeout",
+            min=0.0,
+            help=(
+                "Timeout (seconds) for the small metadata fetches "
+                "(index, version, manifest)."
+            ),
+        ),
+    ] = 30.0,
+    stimuli: Annotated[
+        bool,
+        typer.Option(
+            "--stimuli",
+            help=(
+                "Include the ``stimuli`` scope alongside the default "
+                "``raw`` scope."
+            ),
+        ),
+    ] = False,
+    derivatives: Annotated[
+        bool,
+        typer.Option(
+            "--derivatives",
+            help=(
+                "Include the ``derivatives`` scope alongside the default "
+                "``raw`` scope."
+            ),
+        ),
+    ] = False,
+    no_data: Annotated[
+        bool,
+        typer.Option(
+            "--no-data",
+            help=(
+                "Skip annexed binaries. Only fetch git-tracked sidecars "
+                "(JSON, TSV, README, etc.); useful for inspection."
+            ),
+        ),
+    ] = False,
+    verbose: Annotated[
+        bool,
+        typer.Option(
+            "--verbose",
+            "-v",
+            help="Print the resolved download parameters before starting.",
+        ),
+    ] = False,
     data_url: Annotated[
         str,
         typer.Option(
@@ -242,10 +355,22 @@ def download_cli(
         datatype=datatype,
         suffix=suffix,
         extension=extension,
-        scope=scope,
+        scope=_merge_scopes(scope, stimuli=stimuli, derivatives=derivatives),
         pipeline=pipeline,
         entity=entity,
     )
+    if verbose:
+        _print_resolved_params(
+            dataset=dataset,
+            tag=tag,
+            target_dir=target_dir,
+            bids_filters=bids_filters,
+            downloader=downloader,
+            max_concurrent_downloads=max_concurrent_downloads,
+            metadata_timeout=metadata_timeout,
+            no_data=no_data,
+            data_url=data_url,
+        )
     try:
         download(
             dataset=dataset,
@@ -257,6 +382,8 @@ def download_cli(
             verify_size=verify_size,
             max_retries=max_retries,
             max_concurrent_downloads=max_concurrent_downloads,
+            metadata_timeout=metadata_timeout,
+            no_data=no_data,
             data_url=data_url,
         )
     except (RuntimeError, ValueError, FileExistsError) as exc:
@@ -268,9 +395,8 @@ def download_cli(
 def versions_cli(
     dataset: Annotated[
         str,
-        typer.Option(
-            "--dataset",
-            "-d",
+        typer.Argument(
+            metavar="DATASET",
             help="The NEMAR dataset identifier, for example nm000132.",
         ),
     ],

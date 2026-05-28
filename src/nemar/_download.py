@@ -212,6 +212,7 @@ def download(
     metadata_timeout: float = 30.0,
     stream_timeout: float = 60.0,
     data_url: str = DEFAULT_DATA_URL,
+    no_data: bool = False,
 ) -> None:
     """Download a public NEMAR dataset through ``data.nemar.org``.
 
@@ -220,6 +221,14 @@ def download(
     normalization sweep, then to :func:`_run` for the algorithmic
     sequence (index → version → metadata → manifest → select →
     target-check → transfer).
+
+    ``no_data=True`` switches to a metadata-only transfer: after BIDS
+    selection, only files whose checksum is git-tracked (i.e. the
+    small sidecars, JSON descriptors, TSVs, ``README`` etc.) are
+    transferred. Files that ride the git-annex backend
+    (``sha256`` / ``md5`` checksum) are dropped. Useful for catalog
+    inspection, manifest verification, or pre-flight tooling that
+    only needs the BIDS metadata without the heavy recording binaries.
     """
     request = DownloadRequest.from_kwargs(
         dataset=dataset,
@@ -246,6 +255,7 @@ def download(
         metadata_timeout=metadata_timeout,
         stream_timeout=stream_timeout,
         data_url=data_url,
+        no_data=no_data,
     )
     _run(request)
 
@@ -293,6 +303,10 @@ def _run(request: DownloadRequest) -> None:
     )
     plan.raise_if_unmatched_includes(filenames=[file.path for file in files])
     selected_files = list(plan.final)
+    if request.no_data:
+        selected_files = [
+            file for file in selected_files if file.git_sha1 is not None
+        ]
     local = LocalDataset.from_dir(request.target_path)
     if local is not None:
         local.assert_compatible_with(dataset=request.dataset, tag=selected_tag)
