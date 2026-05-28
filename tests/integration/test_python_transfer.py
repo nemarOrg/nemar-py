@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 import hashlib
+import socket
+from pathlib import Path
 
+import boto3
 import httpx
 import pytest
+import s3fs
+from moto.server import ThreadedMotoServer
 from tqdm.auto import tqdm
 
 import nemar
 from nemar import _transfer
 from nemar._models import DatasetFile
 from nemar._retry import RetryPolicy
+from nemar._transfer import TransferOptions, select_backend
 from nemar._verification import VerifyPolicy
 from tests.fixtures.factories import (
     make_blob,
@@ -383,3 +389,153 @@ def test_no_data_false_still_fetches_annexed_binaries(
 
     assert (target_dir / "dataset_description.json").read_bytes() == sidecar
     assert (target_dir / "eeg" / "sub-001_eeg.set").read_bytes() == binary
+
+
+# ---------------------------------------------------------------------------
+# S3 chain integration — moto-backed S3 over real HTTPS fallback
+# ---------------------------------------------------------------------------
+
+
+def _free_port_for_chain() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.fixture
+def moto_s3_chain(monkeypatch):
+    """Mirror of the unit-test moto fixture, for end-to-end chain tests."""
+    s3fs.S3FileSystem.clear_instance_cache()
+    port = _free_port_for_chain()
+    server = ThreadedMotoServer(port=port)
+    server.start()
+    endpoint_url = f"http://127.0.0.1:{port}"
+    monkeypatch.setenv("AWS_ENDPOINT_URL_S3", endpoint_url)
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-2")
+    try:
+        client = boto3.client(
+            "s3",
+            endpoint_url=endpoint_url,
+            region_name="us-east-2",
+            aws_access_key_id="testing",
+            aws_secret_access_key="testing",
+        )
+        try:
+            client.create_bucket(
+                Bucket="nemar",
+                CreateBucketConfiguration={"LocationConstraint": "us-east-2"},
+            )
+        except client.exceptions.BucketAlreadyOwnedByYou:
+            pass
+        import json as _json
+
+        client.put_bucket_policy(
+            Bucket="nemar",
+            Policy=_json.dumps(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": "*",
+                            "Action": "s3:GetObject",
+                            "Resource": "arn:aws:s3:::nemar/*",
+                        }
+                    ],
+                }
+            ),
+        )
+        yield client
+    finally:
+        server.stop()
+
+
+def test_chain_auto_fetches_from_s3_when_available(
+    moto_s3_chain, tmp_path: Path
+) -> None:
+    """``select_backend('auto')`` resolves to a chain whose primary is S3,
+    and a published S3 object lands on disk via S3 (no HTTPS hit).
+    """
+    from nemar._s3 import annex_key_for
+
+    content = b"chain via S3" * 32
+    f = DatasetFile(
+        path="eeg/run-01.set",
+        url="https://does.not.exist/should-never-be-hit",
+        size=len(content),
+        sha256=hashlib.sha256(content).hexdigest(),
+    )
+    moto_s3_chain.put_object(
+        Bucket="nemar",
+        Key=f"nm000132/objects/{annex_key_for(f)}",
+        Body=content,
+    )
+
+    backend = select_backend(
+        TransferOptions(
+            backend="auto", max_concurrent_downloads=1, stream_timeout=60.0
+        ),
+        dataset="nm000132",
+        datalad_url=None,
+    )
+    backend.transfer(
+        [f],
+        target_dir=tmp_path,
+        options=TransferOptions(
+            backend="auto", max_concurrent_downloads=1, stream_timeout=60.0
+        ),
+        verify=VerifyPolicy(),
+        retry=RetryPolicy.default().with_attempts(0),
+    )
+    assert (tmp_path / "eeg" / "run-01.set").read_bytes() == content
+
+
+def test_chain_falls_back_to_https_when_s3_misses(
+    moto_s3_chain, nemar_endpoint, tmp_path: Path
+) -> None:
+    """When the S3 object is missing, the chain transparently routes
+    the whole batch through the HTTPS fallback served by the local
+    pytest-httpserver fixture.
+    """
+    content = b"chain via HTTPS fallback" * 32
+    file = _publish_single_file_via_fixture(
+        nemar_endpoint, path="eeg/sub-001/eeg.set", content=content
+    )
+    # Note: deliberately do NOT publish to moto — first S3 GET 404s.
+
+    backend = select_backend(
+        TransferOptions(
+            backend="auto", max_concurrent_downloads=1, stream_timeout=60.0
+        ),
+        dataset="nm000132",
+        datalad_url=None,
+    )
+    backend.transfer(
+        [file],
+        target_dir=tmp_path,
+        options=TransferOptions(
+            backend="auto", max_concurrent_downloads=1, stream_timeout=60.0
+        ),
+        verify=VerifyPolicy(),
+        retry=RetryPolicy.default().with_attempts(0),
+    )
+    assert (tmp_path / file.path).read_bytes() == content
+
+
+def _publish_single_file_via_fixture(nemar_endpoint, *, path: str, content: bytes):
+    """Publish one file via the HTTPS fixture and return its DatasetFile."""
+    index = make_index(dataset="nm000132")
+    entry = make_manifest_entry(path=path, content=content)
+    manifest = make_manifest_list([entry])
+    nemar_endpoint.publish(
+        "nm000132",
+        index=index,
+        manifest=manifest,
+        files={f"v1.0.0/{path}": content},
+    )
+    return DatasetFile(
+        path=path,
+        url=f"{nemar_endpoint.base_url}nm000132/v1.0.0/{path}",
+        size=len(content),
+        sha256=hashlib.sha256(content).hexdigest(),
+    )

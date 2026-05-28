@@ -60,6 +60,26 @@ shape the canonical source uses.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
+
+import s3fs
+from tqdm.auto import tqdm
+
+from nemar._errors import S3Error
+from nemar._models import DatasetFile
+
+if TYPE_CHECKING:
+    # Type-only imports — used purely for annotations on
+    # :meth:`S3Backend.transfer`. Pulling :class:`TransferOptions` at
+    # runtime would create a ``_transfer → _s3 → _transfer`` cycle.
+    # :class:`~nemar._transfer.TransferBackend` is a structural Protocol,
+    # so the runtime never inspects these annotations.
+    from nemar._retry import RetryPolicy
+    from nemar._transfer import TransferOptions
+    from nemar._verification import VerifyPolicy
+
 NEMAR_S3_BUCKET = "nemar"
 NEMAR_S3_REGION = "us-east-2"
 NEMAR_S3_HOST = "https://nemar.s3.us-east-2.amazonaws.com"
@@ -176,3 +196,118 @@ def archive_url(dataset: str, version: str) -> str:
         f"{NEMAR_S3_HOST}/{dataset}/archives/"
         f"{_normalize_version(version)}.zip"
     )
+
+
+def annex_key_for(file: DatasetFile) -> str | None:
+    """Derive the git-annex content-addressed key for one :class:`DatasetFile`.
+
+    Returns the SHA256E or MD5E form the bucket layout uses
+    (``SHA256E-s<size>--<hex><suffix>``), or ``None`` when the file's
+    checksum is git-tracked (``git_sha1``) or absent. ``None`` is the
+    signal to short-circuit the S3 layer for this file — the caller
+    raises :class:`~nemar._errors.S3Error` so the layered wrapper sends
+    the whole batch to the next layer (DataLad / HTTPS).
+
+    The suffix carries the same role as in git-annex itself: it lets a
+    consumer guess the content type from the key. ``path`` is the
+    in-manifest BIDS path; the suffix is the last ``.<ext>`` of the
+    final path component, empty when the file has no extension.
+    """
+    if file.size is None:
+        return None
+    suffix = PurePosixPath(file.path).suffix
+    if file.sha256:
+        return f"SHA256E-s{file.size}--{file.sha256}{suffix}"
+    if file.md5:
+        return f"MD5E-s{file.size}--{file.md5}{suffix}"
+    return None
+
+
+class S3Backend:
+    """Adapter that fetches files directly from the public NEMAR S3 bucket.
+
+    Anonymous public-read against ``nemar.s3.us-east-2.amazonaws.com``
+    via ``s3fs``. The pattern matches ``eegdash``'s downloader (which
+    has been running this in production for years against the same
+    bucket) — one shared :class:`s3fs.S3FileSystem` per batch, anonymous
+    auth, content-addressed at ``<dataset>/objects/<annex-key>``.
+
+    Failure-mode contract: the **first** S3 miss aborts the whole
+    batch's S3 transfer with :class:`~nemar._errors.S3Error`. The
+    layered wrapper catches it and sends the whole batch to the next
+    layer (DataLad → HTTPS). Backends stay batch-atomic; per-file
+    fallback granularity is intentionally out of the contract.
+
+    Hash verification is **not** this backend's job — the orchestrator
+    runs :func:`~nemar._verification.assert_all_present` after
+    ``transfer`` returns. Every other backend honours the same split.
+    """
+
+    def __init__(self, dataset: str, *, max_concurrency: int = 16) -> None:
+        if max_concurrency < 1:
+            raise ValueError(
+                f"max_concurrency must be >= 1, got {max_concurrency}"
+            )
+        self.dataset = dataset
+        self.max_concurrency = max_concurrency
+
+    def transfer(
+        self,
+        files: Sequence[DatasetFile],
+        *,
+        target_dir: Path,
+        options: TransferOptions,
+        verify: VerifyPolicy,
+        retry: RetryPolicy,
+    ) -> None:
+        """Fetch every entry in ``files`` into ``target_dir`` from S3.
+
+        The ``options`` / ``verify`` / ``retry`` policies are accepted
+        to honour the :class:`~nemar._transfer.TransferBackend`
+        protocol; this backend uses ``options.max_concurrent_downloads``
+        for the shared :class:`s3fs.S3FileSystem` and otherwise leaves
+        verification / retry to the orchestrator and the layered
+        wrapper. The HTTPS fallback exercises both policies fully.
+        """
+        del verify, retry  # See docstring — split owned by orchestrator.
+        max_concurrency = min(
+            self.max_concurrency, max(1, options.max_concurrent_downloads)
+        )
+        try:
+            fs = s3fs.S3FileSystem(
+                anon=True,
+                max_concurrency=max_concurrency,
+                client_kwargs={"region_name": NEMAR_S3_REGION},
+            )
+        except Exception as exc:  # pragma: no cover — defensive
+            raise S3Error(
+                f"failed to construct anonymous S3 filesystem: {exc}"
+            ) from exc
+
+        total = sum(file.size or 0 for file in files)
+        with tqdm(
+            total=total,
+            desc="S3",
+            unit="B",
+            unit_scale=True,
+            unit_divisor=1024,
+        ) as progress:
+            for file in files:
+                key = annex_key_for(file)
+                if key is None:
+                    raise S3Error(
+                        f"{file.path!r} is not annexed "
+                        "(no sha256/md5 checksum on the manifest entry); "
+                        "the S3 backend has nothing to fetch."
+                    )
+                s3_path = f"{NEMAR_S3_BUCKET}/{self.dataset}/objects/{key}"
+                local_path = target_dir / file.path
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    fs.get(s3_path, str(local_path))
+                except Exception as exc:
+                    raise S3Error(
+                        f"S3 fetch failed for {file.path!r} "
+                        f"(s3://{s3_path}): {exc}"
+                    ) from exc
+                progress.update(file.size or 0)

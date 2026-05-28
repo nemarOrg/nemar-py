@@ -257,10 +257,12 @@ def download_cli(
         typer.Option(
             "--downloader",
             help=(
-                "Transfer backend: auto, python, or datalad. "
-                "auto and datalad layer DataLad over HTTPS when the dataset "
-                "index advertises a datalad_url; python opts out of the "
-                "DataLad layer."
+                "Transfer backend: auto, python, datalad, or s3. "
+                "auto composes S3 → DataLad (when advertised) → HTTPS. "
+                "python opts out of every layer and uses HTTPS only. "
+                "s3 fetches from the public NEMAR S3 bucket with no fallback. "
+                "datalad layers DataLad over HTTPS when a datalad_url is "
+                "advertised."
             ),
         ),
     ] = "auto",

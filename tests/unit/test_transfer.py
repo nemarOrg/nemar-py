@@ -19,12 +19,15 @@ from pathlib import Path
 
 import httpx
 
-from nemar._datalad import DataLadBackend, LayeredBackend
+from nemar._datalad import DataLadBackend
+from nemar._errors import DataLadError, S3Error
 from nemar._models import DatasetFile
-from nemar._request import TransferOptions
 from nemar._retry import RetryPolicy
+from nemar._s3 import S3Backend
 from nemar._transfer import (
+    LayeredBackend,
     PythonBackend,
+    TransferOptions,
     select_backend,
 )
 from nemar._verification import VerifyPolicy
@@ -41,56 +44,6 @@ def _make_options(
         max_concurrent_downloads=max_concurrent_downloads,
         stream_timeout=stream_timeout,
     )
-
-
-class TestSelectBackend:
-    """Backend resolution by policy and advertised ``datalad_url``."""
-
-    def test_auto_returns_python_backend(self) -> None:
-        backend = select_backend(_make_options(backend="auto"))
-        assert isinstance(backend, PythonBackend)
-
-    def test_explicit_python_returns_python_backend(self) -> None:
-        backend = select_backend(_make_options(backend="python"))
-        assert isinstance(backend, PythonBackend)
-
-    def test_auto_with_datalad_url_returns_layered_backend(self) -> None:
-        """When the index advertises a datalad_url, ``auto`` layers
-        DataLad over HTTPS.
-        """
-        backend = select_backend(
-            _make_options(backend="auto"),
-            datalad_url="https://github.com/OpenNeuroDatasets/ds000132.git",
-            revision="v1.0.0",
-        )
-        assert isinstance(backend, LayeredBackend)
-        assert isinstance(backend.primary, DataLadBackend)
-        assert backend.primary.datalad_url.endswith("ds000132.git")
-        assert backend.primary.revision == "v1.0.0"
-        assert isinstance(backend.fallback, PythonBackend)
-
-    def test_explicit_datalad_with_url_returns_layered_backend(self) -> None:
-        """Explicit ``datalad`` keeps the HTTPS fallback ('always fall back')."""
-        backend = select_backend(
-            _make_options(backend="datalad"),
-            datalad_url="https://github.com/OpenNeuroDatasets/ds000132.git",
-        )
-        assert isinstance(backend, LayeredBackend)
-        assert isinstance(backend.primary, DataLadBackend)
-        assert isinstance(backend.fallback, PythonBackend)
-
-    def test_explicit_datalad_without_url_falls_back_to_https(self) -> None:
-        """``datalad`` with no advertised URL degrades to plain HTTPS with a notice."""
-        backend = select_backend(_make_options(backend="datalad"), datalad_url=None)
-        assert isinstance(backend, PythonBackend)
-
-    def test_explicit_python_ignores_datalad_url(self) -> None:
-        """Explicit ``python`` is an opt-out from the DataLad layer."""
-        backend = select_backend(
-            _make_options(backend="python"),
-            datalad_url="https://github.com/OpenNeuroDatasets/ds000132.git",
-        )
-        assert isinstance(backend, PythonBackend)
 
 
 class TestPythonBackendTransfer:
@@ -145,3 +98,156 @@ class TestBackendProtocolShape:
     def test_python_backend_exposes_transfer_method(self) -> None:
         assert hasattr(PythonBackend, "transfer")
         assert callable(PythonBackend.transfer)
+
+
+# ---------------------------------------------------------------------------
+# LayeredBackend — generalized fallback contract
+# ---------------------------------------------------------------------------
+
+
+class _RecordingBackend:
+    """Tiny in-memory backend stub that records calls and can raise."""
+
+    def __init__(self, *, raises: BaseException | None = None) -> None:
+        self.raises = raises
+        self.calls: list[tuple] = []
+
+    def transfer(self, files, *, target_dir, options, verify, retry) -> None:
+        self.calls.append((tuple(files), target_dir, options, verify, retry))
+        if self.raises is not None:
+            raise self.raises
+
+
+def _opts() -> TransferOptions:
+    return TransferOptions(
+        backend="auto", max_concurrent_downloads=1, stream_timeout=60.0
+    )
+
+
+class TestLayeredBackendGeneralized:
+    """``LayeredBackend.fallback_on`` is the seam.
+
+    The pre-S3 contract caught :class:`DataLadError` only; the new
+    contract takes a tuple of exception classes so the same wrapper
+    composes the S3 layer (catching :class:`S3Error`) and the DataLad
+    layer (catching :class:`DataLadError`) with no per-layer special
+    case.
+    """
+
+    def test_fallback_on_custom_class_catches_and_proceeds(
+        self, tmp_path: Path
+    ) -> None:
+        from nemar._errors import S3Error
+
+        primary = _RecordingBackend(raises=S3Error("boom"))
+        fallback = _RecordingBackend()
+        wrapper = LayeredBackend(primary, fallback, fallback_on=(S3Error,))
+
+        wrapper.transfer(
+            [],
+            target_dir=tmp_path,
+            options=_opts(),
+            verify=VerifyPolicy(),
+            retry=RetryPolicy.default().with_attempts(0),
+        )
+        assert len(primary.calls) == 1
+        assert len(fallback.calls) == 1
+
+    def test_non_matching_exception_propagates(self, tmp_path: Path) -> None:
+        from nemar._errors import DataLadError, S3Error
+
+        # Wrap a primary that raises DataLadError, but only catch S3Error.
+        primary = _RecordingBackend(raises=DataLadError("not caught"))
+        fallback = _RecordingBackend()
+        wrapper = LayeredBackend(primary, fallback, fallback_on=(S3Error,))
+
+        import pytest
+
+        with pytest.raises(DataLadError):
+            wrapper.transfer(
+                [],
+                target_dir=tmp_path,
+                options=_opts(),
+                verify=VerifyPolicy(),
+                retry=RetryPolicy.default().with_attempts(0),
+            )
+        assert len(fallback.calls) == 0
+
+    def test_default_fallback_on_is_dataladerror(self, tmp_path: Path) -> None:
+        """Default preserves the pre-S3 call sites that did not pass the kwarg."""
+        from nemar._errors import DataLadError
+
+        primary = _RecordingBackend(raises=DataLadError("boom"))
+        fallback = _RecordingBackend()
+        wrapper = LayeredBackend(primary, fallback)
+
+        wrapper.transfer(
+            [],
+            target_dir=tmp_path,
+            options=_opts(),
+            verify=VerifyPolicy(),
+            retry=RetryPolicy.default().with_attempts(0),
+        )
+        assert len(fallback.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# select_backend — chain shape per (downloader, datalad_url)
+# ---------------------------------------------------------------------------
+
+
+class TestSelectBackendChainShape:
+    """The chain is a list-builder, not a branching pyramid.
+
+    Each case below pins one (downloader, datalad_url) → backend
+    shape. Adding a new layer in the future should only add new
+    rows; existing rows must not drift.
+    """
+
+    def _select(self, *, backend: str, datalad_url: str | None):
+        return select_backend(
+            TransferOptions(
+                backend=backend, max_concurrent_downloads=1, stream_timeout=60.0
+            ),
+            dataset="nm000132",
+            datalad_url=datalad_url,
+        )
+
+    def test_python_returns_bare_python_backend(self) -> None:
+        result = self._select(backend="python", datalad_url=None)
+        assert isinstance(result, PythonBackend)
+
+    def test_s3_returns_bare_s3_backend(self) -> None:
+        result = self._select(backend="s3", datalad_url=None)
+        assert isinstance(result, S3Backend)
+
+    def test_auto_with_datalad_url_returns_three_layer_chain(self) -> None:
+        # auto + datalad_url → S3 → (DataLad → HTTPS)
+        chain = self._select(backend="auto", datalad_url="https://x/datalad")
+        assert isinstance(chain, LayeredBackend)
+        assert isinstance(chain.primary, S3Backend)
+        assert chain.fallback_on == (S3Error,)
+
+        inner = chain.fallback
+        assert isinstance(inner, LayeredBackend)
+        assert isinstance(inner.primary, DataLadBackend)
+        assert inner.fallback_on == (DataLadError,)
+        assert isinstance(inner.fallback, PythonBackend)
+
+    def test_auto_without_datalad_url_returns_two_layer_chain(self) -> None:
+        chain = self._select(backend="auto", datalad_url=None)
+        assert isinstance(chain, LayeredBackend)
+        assert isinstance(chain.primary, S3Backend)
+        assert chain.fallback_on == (S3Error,)
+        assert isinstance(chain.fallback, PythonBackend)
+
+    def test_datalad_with_url_returns_datalad_over_https(self) -> None:
+        chain = self._select(backend="datalad", datalad_url="https://x/datalad")
+        assert isinstance(chain, LayeredBackend)
+        assert isinstance(chain.primary, DataLadBackend)
+        assert chain.fallback_on == (DataLadError,)
+        assert isinstance(chain.fallback, PythonBackend)
+
+    def test_datalad_without_url_degrades_to_python(self) -> None:
+        result = self._select(backend="datalad", datalad_url=None)
+        assert isinstance(result, PythonBackend)

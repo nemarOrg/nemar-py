@@ -27,25 +27,11 @@ from typing import Any
 from nemar._bids import BidsQuery
 from nemar._endpoint import DataEndpoint
 from nemar._retry import RetryPolicy
+from nemar._transfer import VALID_BACKENDS, TransferOptions
 from nemar._verification import VerifyPolicy
 
 DEFAULT_DATA_URL = "https://data.nemar.org/"
 DATASET_ID_RE = re.compile(r"^(nm|on)\d{6}$")
-_VALID_BACKENDS = frozenset({"auto", "python", "datalad"})
-
-
-@dataclass(frozen=True)
-class TransferOptions:
-    """Transfer-backend knobs that travel with one download request.
-
-    Bundles the three runtime values the orchestrator forwards to the
-    transfer phase: which backend to select, how much concurrency to
-    allow, and the per-stream timeout for the Python backend.
-    """
-
-    backend: str
-    max_concurrent_downloads: int
-    stream_timeout: float
 
 
 @dataclass(frozen=True)
@@ -176,9 +162,9 @@ def _validate(
         raise ValueError(
             'dataset must look like "nm000132" or "on005505".'
         )
-    if downloader not in _VALID_BACKENDS:
+    if downloader not in VALID_BACKENDS:
         raise ValueError(
-            'downloader must be one of "auto", "python", or "datalad".'
+            'downloader must be one of "auto", "python", "datalad", or "s3".'
         )
     if max_retries < 0:
         raise ValueError("max_retries must be non-negative.")

@@ -42,6 +42,11 @@ dependencies = [
   # ``brew install git-annex`` / ``apt install git-annex`` separately.
   "datalad>=0.19",
   "git-annex>=10",
+  # Direct S3 transfer layer — anonymous public-read against
+  # ``nemar.s3.us-east-2.amazonaws.com``. The wheel is pure-Python and
+  # ``eegdash`` (which uses the same bucket) has been running this in
+  # production for years, so the contract is well-exercised.
+  "s3fs>=2024.1",
 ]
 dynamic = ["version"]
 
@@ -80,6 +85,11 @@ dev = [
   # requires the ``toxiproxy-server`` binary on PATH
   # (brew install toxiproxy) and ``NEMAR_CHAOS=1`` to actually run.
   "chaostoolkit-toxiproxy>=0.3",
+  # In-memory S3 server for tests/integration/test_python_transfer.py
+  # and tests/unit/test_s3.py. ``moto[s3]`` boots a botocore-compatible
+  # endpoint so ``s3fs`` can talk to a real-shaped API without
+  # touching AWS.
+  "moto[s3,server]>=5",
 ]
 
 [build-system]

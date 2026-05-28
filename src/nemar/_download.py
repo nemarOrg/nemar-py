@@ -357,6 +357,7 @@ def _run(request: DownloadRequest) -> None:
     if pending:
         backend = select_backend(
             request.transfer,
+            dataset=request.dataset,
             datalad_url=datalad_url,
             revision=selected_tag,
         )

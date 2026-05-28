@@ -272,6 +272,22 @@ def test_cli_jobs_alias_for_max_concurrent_downloads(monkeypatch) -> None:
     assert seen["max_concurrent_downloads"] == 4
 
 
+def test_cli_downloader_s3_forwards(monkeypatch) -> None:
+    """``--downloader s3`` reaches ``download(...)`` as ``downloader='s3'``.
+
+    Pins the new value is wired through the validator, the CLI parser,
+    and the kwargs passthrough; ``select_backend`` is what turns it
+    into an :class:`S3Backend`, which the transfer-suite covers.
+    """
+    seen: dict = {}
+    monkeypatch.setattr(_cli, "download", lambda **kwargs: seen.update(kwargs))
+
+    result = runner.invoke(_cli.app, ["download", "nm000132", "--downloader", "s3"])
+
+    assert result.exit_code == 0, result.stderr
+    assert seen["downloader"] == "s3"
+
+
 def test_cli_verbose_prints_resolved_params(monkeypatch) -> None:
     """``--verbose`` echoes a parameter summary to stderr before starting."""
     monkeypatch.setattr(_cli, "download", lambda **kwargs: None)

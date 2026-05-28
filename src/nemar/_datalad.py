@@ -1,22 +1,20 @@
-"""DataLad transfer adapter — first layer of the layered transfer model.
+"""DataLad transfer adapter — one layer of the layered transfer chain.
 
 The :class:`DataLadBackend` clones the dataset's DataLad repo (advertised
 by the NEMAR data endpoint as ``index.datalad_url``) and runs
-``datalad get`` against the BIDS-selected files. The :class:`LayeredBackend`
-wraps a primary backend with an HTTPS fallback: when the primary raises
-:class:`~nemar._errors.DataLadError`, the wrapper writes a one-line tqdm
-notice and re-runs the same file set through the fallback adapter
-(the python HTTPS path). This is the steady-state
-contract — the two-layer model the public API exposes whenever a
-``datalad_url`` is known.
+``datalad get`` against the BIDS-selected files. Composition with the
+S3 / HTTPS layers happens in :class:`~nemar._transfer.LayeredBackend`
+(which lives next to the :class:`~nemar._transfer.TransferBackend`
+Protocol it composes); see :func:`nemar._transfer.select_backend` for
+the chain assembly.
 
 DataLad is an optional dependency. The import happens lazily through
 :func:`_import_datalad` so the module itself imports cheaply, and so
 that callers who never select the DataLad path do not pay for the
 ``datalad`` package's heavy import surface (which itself pulls in
 ``git-annex``, ``rdflib``, and friends). A missing dependency surfaces
-as :class:`DataLadError`, which the :class:`LayeredBackend` already
-treats as a fallback signal.
+as :class:`DataLadError`, which the layered wrapper treats as a
+fallback signal.
 
 Exception scoping
 -----------------
@@ -55,22 +53,17 @@ from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
-from tqdm.auto import tqdm
-
 from nemar._errors import DataLadError
 from nemar._models import DatasetFile
-from nemar._request import TransferOptions
 from nemar._retry import RetryPolicy
 from nemar._verification import VerifyPolicy
 
 if TYPE_CHECKING:
-    # ``TransferBackend`` is a structural :class:`typing.Protocol`, so the
-    # adapters in this module satisfy it without a runtime import. Guarding
-    # the import behind ``TYPE_CHECKING`` keeps the dependency direction
-    # one-way (``_datalad`` → ``_transfer`` only for type checkers) and
-    # documents that this module has no runtime coupling to the HTTPS
-    # backends.
-    from nemar._transfer import TransferBackend
+    # ``TransferOptions`` is used only as a type annotation. Guarding it
+    # behind ``TYPE_CHECKING`` keeps the dependency direction one-way
+    # (``_datalad`` → ``_transfer`` only for type checkers) and documents
+    # that this module has no runtime coupling to the HTTPS / S3 backends.
+    from nemar._transfer import TransferOptions
 
 
 @dataclass(frozen=True)
@@ -237,55 +230,3 @@ class DataLadBackend:
             ) from exc
 
 
-class LayeredBackend:
-    """Two-layer transfer adapter: try primary, fall back to secondary.
-
-    Catches :class:`DataLadError` specifically — every other transfer
-    failure (HTTP errors, verification mismatches, retries exhausted)
-    propagates from the primary. The fallback runs over the same file
-    set with the same policies; the post-transfer
-    :func:`~nemar._verification.assert_all_present` sweep that the
-    orchestrator runs after this function returns is the real gate
-    either way.
-
-    Construction is policy-driven by :func:`nemar._transfer.select_backend`
-    and not part of the public seam — callers configure the policy via
-    :class:`~nemar._request.TransferOptions` and the index's
-    ``datalad_url``, not by building this wrapper directly.
-    """
-
-    def __init__(
-        self, primary: TransferBackend, fallback: TransferBackend
-    ) -> None:
-        self.primary = primary
-        self.fallback = fallback
-
-    def transfer(
-        self,
-        files: Sequence[DatasetFile],
-        *,
-        target_dir: Path,
-        options: TransferOptions,
-        verify: VerifyPolicy,
-        retry: RetryPolicy,
-    ) -> None:
-        """Run primary; on :class:`DataLadError`, run fallback over ``files``."""
-        try:
-            self.primary.transfer(
-                files,
-                target_dir=target_dir,
-                options=options,
-                verify=verify,
-                retry=retry,
-            )
-        except DataLadError as exc:
-            tqdm.write(
-                f"DataLad transfer failed; falling back to HTTPS downloader: {exc}"
-            )
-            self.fallback.transfer(
-                files,
-                target_dir=target_dir,
-                options=options,
-                verify=verify,
-                retry=retry,
-            )

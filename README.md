@@ -35,7 +35,7 @@ nemar.download(dataset="nm000132", target_dir="data/nm000132")
 | `-o, --output DIR`        | Target directory (default `./<DATASET>`)            |
 | `-j, --jobs N`            | Parallel downloads (default 16)                     |
 | `--tag TAG`               | Pin a version; default `latest`                     |
-| `--downloader BACKEND`    | `auto` (default) \| `python` \| `datalad`           |
+| `--downloader BACKEND`    | `auto` (default) \| `s3` \| `python` \| `datalad`   |
 | `--no-data`               | Sidecars only — skip annexed binaries               |
 | `--stimuli`               | Add `stimuli/` scope                                |
 | `--derivatives`           | Add `derivatives/` scope                            |
@@ -80,7 +80,10 @@ nemar.download(
 
 ## Behaviour
 
-- Starts from `https://data.nemar.org/{dataset}/`. No auth, no S3 fallback.
-- **DataLad is the default first layer**; HTTPS resumes via Range/206 on any DataLad failure (missing sibling, network error, …).
+- Catalog (`index`, `version`, `manifest`) is fetched from `https://data.nemar.org/{dataset}/`. No auth.
+- File bytes use a **three-layer chain: S3 → DataLad → HTTPS**.
+  - **S3** is tried first — anonymous public-read against `nemar.s3.us-east-2.amazonaws.com`, content-addressed at `<dataset>/objects/<git-annex-key>` (`eegdash`-style direct fetch).
+  - **DataLad** is the second layer when the dataset index advertises a `datalad_url`.
+  - **HTTPS** through `data.nemar.org` is the always-available fallback, with Range/206 resume.
 - BIDS root files (`dataset_description.json`, `participants.tsv`/`json`, `README*`, `CHANGES`, `LICENSE`) are always kept — even with `--include` / `--exclude`.
 

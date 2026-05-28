@@ -14,8 +14,21 @@ layout, these tests fail loudly and tell us exactly where.
 
 from __future__ import annotations
 
-import pytest
+import hashlib
+import json
+import socket
 
+import boto3
+import pytest
+import s3fs
+from moto.server import ThreadedMotoServer
+
+from nemar._errors import S3Error
+from nemar._models import DatasetFile
+from nemar._retry import RetryPolicy
+from nemar._s3 import S3Backend, annex_key_for
+from nemar._transfer import TransferOptions
+from nemar._verification import VerifyPolicy
 from nemar.s3 import (
     NEMAR_S3_BUCKET,
     NEMAR_S3_HOST,
@@ -134,3 +147,222 @@ def test_s3_object_url_handles_on_prefix() -> None:
     url = s3_object_url("on005505", key)
     assert url.startswith("https://nemar.s3.us-east-2.amazonaws.com/on005505/objects/")
     assert url.endswith(key)
+
+
+# ---------------------------------------------------------------------------
+# annex_key_for — derives the bucket key from a DatasetFile
+# ---------------------------------------------------------------------------
+
+
+class TestAnnexKeyFor:
+    """``annex_key_for`` builds the git-annex content key per backend rule.
+
+    The bucket layout is content-addressed; this helper is the single
+    seam that turns a manifest entry into a bucket key. Each branch
+    here pins one of the four observed manifest shapes against a key
+    that matches what ``git annex`` itself would have produced for the
+    same content.
+    """
+
+    def _file(self, **kw) -> DatasetFile:
+        defaults = {"path": "data/sample.set", "url": "https://example/x", "size": 4096}
+        defaults.update(kw)
+        return DatasetFile(**defaults)
+
+    def test_sha256_with_extension_uses_sha256e(self) -> None:
+        key = annex_key_for(self._file(sha256="abc" * 16))
+        assert key == f"SHA256E-s4096--{'abc' * 16}.set"
+
+    def test_md5_extensionless_path_drops_dot(self) -> None:
+        key = annex_key_for(self._file(path="README", md5="d" * 32))
+        assert key == f"MD5E-s4096--{'d' * 32}"
+
+    def test_git_sha1_only_returns_none(self) -> None:
+        """git_sha1-tracked files are git-objects, not annex objects."""
+        key = annex_key_for(self._file(git_sha1="b" * 40))
+        assert key is None
+
+    def test_no_checksum_returns_none(self) -> None:
+        """A manifest entry without any checksum cannot be addressed in S3."""
+        assert annex_key_for(self._file()) is None
+
+    def test_no_size_returns_none(self) -> None:
+        """The annex key embeds size; without it we cannot synthesize a key."""
+        f = self._file(sha256="a" * 64)
+        f = DatasetFile(path=f.path, url=f.url, size=None, sha256=f.sha256)
+        assert annex_key_for(f) is None
+
+
+# ---------------------------------------------------------------------------
+# S3Backend — end-to-end transfer against a moto-backed in-memory bucket
+# ---------------------------------------------------------------------------
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.fixture
+def moto_s3(monkeypatch):
+    """Stand up an in-memory S3 service via ``moto.server.ThreadedMotoServer``.
+
+    ``s3fs`` talks HTTP to a real-shaped S3 endpoint; ``moto``'s
+    in-process ``mock_aws`` decorator does not catch the underlying
+    ``aiobotocore`` traffic. The threaded server does. We point both
+    ``boto3`` (for object publishing in test setup) and the production
+    ``s3fs`` (for the backend under test) at the same URL via the
+    standard ``AWS_ENDPOINT_URL_S3`` env var that ``aiobotocore``
+    respects natively.
+    """
+    # ``s3fs`` keeps a class-level filesystem cache; clear it so a
+    # previously-cached anonymous fs (pointing at a closed moto port)
+    # does not hijack this test's traffic.
+    s3fs.S3FileSystem.clear_instance_cache()
+    port = _free_port()
+    server = ThreadedMotoServer(port=port)
+    server.start()
+    endpoint_url = f"http://127.0.0.1:{port}"
+    monkeypatch.setenv("AWS_ENDPOINT_URL_S3", endpoint_url)
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-2")
+    try:
+        client = boto3.client(
+            "s3",
+            endpoint_url=endpoint_url,
+            region_name="us-east-2",
+            aws_access_key_id="testing",
+            aws_secret_access_key="testing",
+        )
+        # Each test gets its own ``ThreadedMotoServer`` but moto's
+        # backend state is process-level, so the bucket may already
+        # exist from a previous test. Idempotent create avoids the
+        # race.
+        try:
+            client.create_bucket(
+                Bucket="nemar",
+                CreateBucketConfiguration={"LocationConstraint": "us-east-2"},
+            )
+        except client.exceptions.BucketAlreadyOwnedByYou:
+            pass
+        # Mirror the real NEMAR bucket's public-read object policy so
+        # the production ``S3Backend`` (which uses ``anon=True``) can
+        # ``GET`` what the test publishes. Without this, moto enforces
+        # the default private-by-default behaviour and 403s anonymous
+        # GETs — which is correct AWS-side semantics but not what the
+        # production bucket exposes.
+        client.put_bucket_policy(
+            Bucket="nemar",
+            Policy=json.dumps(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": "*",
+                            "Action": "s3:GetObject",
+                            "Resource": "arn:aws:s3:::nemar/*",
+                        }
+                    ],
+                }
+            ),
+        )
+        yield client
+    finally:
+        server.stop()
+
+
+def _publish_annex_object(
+    client, dataset: str, annex_key: str, content: bytes
+) -> None:
+    client.put_object(
+        Bucket="nemar",
+        Key=f"{dataset}/objects/{annex_key}",
+        Body=content,
+    )
+
+
+def _dataset_file(path: str, content: bytes) -> DatasetFile:
+    return DatasetFile(
+        path=path,
+        url=f"https://example/{path}",
+        size=len(content),
+        sha256=hashlib.sha256(content).hexdigest(),
+    )
+
+
+def _options(*, max_concurrent_downloads: int = 1) -> TransferOptions:
+    return TransferOptions(
+        backend="s3",
+        max_concurrent_downloads=max_concurrent_downloads,
+        stream_timeout=60.0,
+    )
+
+
+def _policies() -> tuple[RetryPolicy, VerifyPolicy]:
+    return RetryPolicy.default().with_attempts(0), VerifyPolicy()
+
+
+class TestS3BackendTransfer:
+    """``S3Backend.transfer`` against a moto-backed bucket.
+
+    Pins three contract halves:
+
+    * Happy path — every annexed file lands on disk with full content.
+    * No-checksum file — backend raises :class:`S3Error` before any
+      S3 call so the layered wrapper falls through to the next layer.
+    * Missing key — :class:`S3Error` is raised with the offending key
+      in the message.
+    """
+
+    def test_happy_path_writes_file(self, moto_s3, tmp_path) -> None:
+        content = b"chunked-tsv-content" * 16
+        f = _dataset_file("eeg/sub-001/eeg.set", content)
+        _publish_annex_object(moto_s3, "nm000132", annex_key_for(f), content)
+
+        backend = S3Backend(dataset="nm000132")
+        retry, verify = _policies()
+        backend.transfer(
+            [f],
+            target_dir=tmp_path,
+            options=_options(),
+            verify=verify,
+            retry=retry,
+        )
+
+        out = tmp_path / "eeg" / "sub-001" / "eeg.set"
+        assert out.read_bytes() == content
+
+    def test_no_checksum_raises_s3error_before_any_network(
+        self, moto_s3, tmp_path
+    ) -> None:
+        f = DatasetFile(
+            path="data/headers.json",
+            url="https://example/data/headers.json",
+            size=128,
+        )
+
+        backend = S3Backend(dataset="nm000132")
+        retry, verify = _policies()
+        with pytest.raises(S3Error, match="not annexed"):
+            backend.transfer(
+                [f],
+                target_dir=tmp_path,
+                options=_options(),
+                verify=verify,
+                retry=retry,
+            )
+
+    def test_missing_key_raises_s3error(self, moto_s3, tmp_path) -> None:
+        f = _dataset_file("eeg/missing.set", b"never published")
+
+        backend = S3Backend(dataset="nm000132")
+        retry, verify = _policies()
+        with pytest.raises(S3Error, match="S3 fetch failed"):
+            backend.transfer(
+                [f],
+                target_dir=tmp_path,
+                options=_options(),
+                verify=verify,
+                retry=retry,
+            )

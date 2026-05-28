@@ -98,6 +98,18 @@ class DataLadError(TransferError):
     """
 
 
+class S3Error(TransferError):
+    """Direct-from-S3 transfer failure.
+
+    Raised by :class:`~nemar._s3.S3Backend` when ``s3fs`` cannot resolve
+    or fetch an object (missing key, unauthenticated, network error,
+    non-annexed manifest entry, …). Subclasses :class:`TransferError`
+    so callers who catch ``TransferError`` still see the diagnostic;
+    the layered wrapper catches :class:`S3Error` specifically so it can
+    fall back to the next layer (DataLad / HTTPS) for the whole batch.
+    """
+
+
 class VerificationError(NemarError):
     """Local file does not satisfy its manifest entry."""
 

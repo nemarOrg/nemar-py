@@ -35,6 +35,7 @@ from __future__ import annotations
 import concurrent.futures
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -42,12 +43,12 @@ import httpx
 from tqdm.auto import tqdm
 
 from nemar import __version__
-from nemar._datalad import DataLadBackend, LayeredBackend
+from nemar._datalad import DataLadBackend
 from nemar._endpoint import DataEndpoint
-from nemar._errors import TransferError, VerificationError
+from nemar._errors import DataLadError, S3Error, TransferError, VerificationError
 from nemar._models import DatasetFile
-from nemar._request import TransferOptions
 from nemar._retry import RetryPolicy
+from nemar._s3 import S3Backend
 from nemar._verification import (
     VerifyPolicy,
     VerifyResult,
@@ -76,6 +77,36 @@ class _RetryFreshError(_RetryableError):
     distinguishes it to set ``force_fresh=True`` on the next attempt
     (a one-shot recovery after HTTP 416).
     """
+
+
+VALID_BACKENDS = frozenset({"auto", "python", "datalad", "s3"})
+"""The accepted values for ``TransferOptions.backend``.
+
+Co-resident with :func:`select_backend` (the only consumer that turns
+a value here into a concrete backend) and :func:`~nemar._request._validate`
+(which imports this constant). Keeping the set and its consumers in
+one module means a new backend addition does not drift between
+validator and selector.
+"""
+
+
+@dataclass(frozen=True)
+class TransferOptions:
+    """Transfer-backend knobs that travel with one download request.
+
+    Bundles the three runtime values the orchestrator forwards to the
+    transfer phase: which backend to select, how much concurrency to
+    allow, and the per-stream timeout for the Python backend. Lives
+    next to :func:`select_backend` (the consumer that reads
+    ``.backend``) rather than under ``_request`` because every concrete
+    backend takes one of these as a parameter — co-locating it with
+    the protocol it parameterizes keeps the transfer surface
+    self-contained.
+    """
+
+    backend: str
+    max_concurrent_downloads: int
+    stream_timeout: float
 
 
 class TransferBackend(Protocol):
@@ -107,55 +138,133 @@ class TransferBackend(Protocol):
         """
 
 
+class LayeredBackend:
+    """Two-layer transfer: try primary, fall back to secondary on a narrow error.
+
+    The fallback fires only on exceptions whose class is in
+    ``fallback_on``. Everything else (HTTP errors, verification
+    mismatches, retries exhausted) propagates from the primary. The
+    fallback runs over the same file set with the same policies; the
+    post-transfer
+    :func:`~nemar._verification.assert_all_present` sweep that the
+    orchestrator runs after this function returns is the real gate
+    either way.
+
+    Construction is policy-driven by :func:`select_backend` and not
+    part of the public seam — callers configure the policy via
+    :class:`~nemar._request.TransferOptions` and the index's
+    ``datalad_url``, not by building this wrapper directly.
+
+    The default ``fallback_on=(DataLadError,)`` preserves the
+    pre-S3 contract for callers that built the wrapper before the
+    parameter existed.
+    """
+
+    def __init__(
+        self,
+        primary: TransferBackend,
+        fallback: TransferBackend,
+        *,
+        fallback_on: tuple[type[BaseException], ...] = (DataLadError,),
+    ) -> None:
+        self.primary = primary
+        self.fallback = fallback
+        self.fallback_on = fallback_on
+
+    def transfer(
+        self,
+        files: Sequence[DatasetFile],
+        *,
+        target_dir: Path,
+        options: TransferOptions,
+        verify: VerifyPolicy,
+        retry: RetryPolicy,
+    ) -> None:
+        """Run primary; on any ``fallback_on`` error, run fallback over ``files``."""
+        try:
+            self.primary.transfer(
+                files,
+                target_dir=target_dir,
+                options=options,
+                verify=verify,
+                retry=retry,
+            )
+        except self.fallback_on as exc:
+            tqdm.write(
+                f"primary backend failed; falling back to next layer: {exc}"
+            )
+            self.fallback.transfer(
+                files,
+                target_dir=target_dir,
+                options=options,
+                verify=verify,
+                retry=retry,
+            )
+
+
 def select_backend(
     options: TransferOptions,
     *,
+    dataset: str | None = None,
     datalad_url: str | None = None,
     revision: str | None = None,
 ) -> TransferBackend:
-    """Resolve ``options.backend`` against the runtime environment.
+    """Resolve ``options.backend`` into a concrete (possibly layered) backend.
 
-    One axis drives the decision: whether the dataset index advertised
-    a ``datalad_url`` (which the orchestrator threads in after the
-    index fetch).
+    The chain shape is: **S3 → DataLad → HTTPS**. Each layer earns a
+    place only when its precondition holds (S3 needs a ``dataset`` id
+    to derive content-addressed keys; the DataLad layer requires
+    ``datalad_url``). The composition is a tiny list-builder so adding
+    a future backend (Azure / GCS / mirror) is one
+    ``layers.append(...)`` line, not three new branches.
 
-    * ``"python"`` → :class:`PythonBackend`. Opt-out from the DataLad
-      layer even when a ``datalad_url`` is available.
-    * ``"auto"`` and ``datalad_url`` is set → :class:`LayeredBackend`
-      wrapping :class:`~nemar._datalad.DataLadBackend` over
-      :class:`PythonBackend`.
-    * ``"auto"`` and no ``datalad_url`` → :class:`PythonBackend`.
-    * ``"datalad"`` and ``datalad_url`` is set →
-      :class:`LayeredBackend` over :class:`PythonBackend`. Even with
-      an explicit ``datalad`` policy, every DataLad failure falls
-      back to HTTPS — that is the steady-state contract the public
-      API exposes.
-    * ``"datalad"`` and no ``datalad_url`` → degrades to plain
-      :class:`PythonBackend` with a tqdm notice. There is no primary
-      to try, so the layered wrapper would be a tautology.
+    * ``"python"`` → bare :class:`PythonBackend`. Skip every other layer.
+    * ``"s3"`` → bare :class:`~nemar._s3.S3Backend`. No fallback. Requires
+      ``dataset``.
+    * ``"auto"`` with ``dataset`` → S3 → DataLad (when advertised) → HTTPS.
+    * ``"auto"`` without ``dataset`` (bulk ``download_files`` API) →
+      DataLad (when advertised) → HTTPS. The S3 layer is skipped because
+      there is no dataset id to derive an annex key against.
+    * ``"datalad"`` and ``datalad_url`` is set → DataLad → HTTPS.
+    * ``"datalad"`` and no ``datalad_url`` → degrade to plain
+      :class:`PythonBackend` with a tqdm notice.
     """
     requested = options.backend
-
-    if requested == "python":
-        return PythonBackend()
-
-    # From here ``requested`` is "auto" or "datalad". The HTTPS pick is
-    # both the standalone result when no DataLad URL is known and the
-    # fallback inside the layered wrapper when one is.
     https = PythonBackend()
 
-    if datalad_url is not None:
-        return LayeredBackend(
-            DataLadBackend(datalad_url=datalad_url, revision=revision),
-            https,
+    if requested == "python":
+        return https
+    if requested == "s3":
+        if dataset is None:
+            raise ValueError(
+                'downloader="s3" requires a dataset id to derive bucket keys; '
+                "use downloader=\"python\" for the bulk download_files API."
+            )
+        return S3Backend(dataset=dataset)
+
+    layers: list[tuple[TransferBackend, tuple[type[BaseException], ...]]] = []
+    if requested == "auto" and dataset is not None:
+        layers.append((S3Backend(dataset=dataset), (S3Error,)))
+    if datalad_url is not None and requested in {"auto", "datalad"}:
+        layers.append(
+            (
+                DataLadBackend(datalad_url=datalad_url, revision=revision),
+                (DataLadError,),
+            )
         )
 
-    if requested == "datalad":
-        tqdm.write(
-            "DataLad backend requested but the dataset index did not advertise "
-            "a datalad_url; using the HTTPS downloader."
-        )
-    return https
+    if not layers:
+        if requested == "datalad":
+            tqdm.write(
+                "DataLad backend requested but the dataset index did not advertise "
+                "a datalad_url; using the HTTPS downloader."
+            )
+        return https
+
+    chain: TransferBackend = https
+    for primary, on in reversed(layers):
+        chain = LayeredBackend(primary, chain, fallback_on=on)
+    return chain
 
 
 class PythonBackend:
