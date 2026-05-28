@@ -7,7 +7,7 @@ download
   NEMARClient.fetch_metadata
   NEMARClient.fetch_manifest
   SelectionPlan.build (inlined in _run)
-  LocalDataset.from_dir(...).assert_compatible_with(...)
+  _check_local_compatibility (inlined in _run)
   detect_case_collisions (inlined in _run)
   select_backend → TransferBackend.transfer  (see :mod:`nemar._transfer`)
 
@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -57,133 +56,99 @@ _DATASET_DESCRIPTION_FILENAME = "dataset_description.json"
 _DOI_PREFIX_TEMPLATE = "10.82901/nemar.{dataset}"
 
 
-@dataclass(frozen=True)
-class LocalDataset:
-    """The dataset identity recovered from a local target directory.
+def _check_local_compatibility(
+    target_path: Path, *, dataset: str, tag: str,
+) -> None:
+    """Raise if downloading ``dataset`` ``tag`` into ``target_path`` would clobber data.
 
-    Previously lived in ``nemar._local_dataset`` as the public-ish surface
-    of a one-purpose module. Inlined here because :func:`_run` is its only
-    caller, and the disk-I/O / pure-reasoning split survives intact: the
-    classmethod is the only thing that touches the filesystem; instance
-    methods are pure decisions over already-parsed fields.
+    Returns silently in the three "no compatibility check needed" cases:
 
-    Construction is via :meth:`from_dir`, which returns ``None`` when the
-    directory is empty / non-existent / has no ``dataset_description.json``
-    — those are the cases where a fresh download has nothing to clash
-    with and the orchestrator should simply proceed.
+    1. ``target_path`` does not exist.
+    2. ``target_path`` exists but is empty.
+    3. ``target_path`` is non-empty but has no ``dataset_description.json``
+       — the "let interrupted downloads resume" case. The orchestrator
+       logs a resume notice for this branch via
+       :func:`_target_has_files_without_description`.
 
-    A non-``None`` instance carries the parsed identity:
+    When a ``dataset_description.json`` is present:
 
-    * ``dataset_id`` — the bare dataset id (``"nm000132"``) recovered
-      from the DOI prefix.
-    * ``version_tag`` — the normalized version tag (``"v1.0.0"``), or
-      ``None`` when the local description is silent on Version.
-
-    All compatibility decisions live in :meth:`assert_compatible_with`,
-    which is pure: it never re-reads the filesystem.
+    * Raises :class:`LocalTargetError` if the file is malformed (bad JSON,
+      missing/non-string ``DatasetDOI``, non-string ``Version``) so silent
+      corruption can never sneak through.
+    * Raises :class:`LocalTargetError` if the local DOI prefix names a
+      *different* dataset.
+    * Raises :class:`LocalTargetError` if the DOI matches but no Version
+      was recorded — continuing would risk silently mixing two versions
+      of the same dataset.
+    * Raises :class:`LocalVersionMismatchError` (a subclass of both
+      :class:`LocalTargetError` and the builtin :class:`FileExistsError`)
+      if the DOI matches but the Version is a different tag than the
+      one requested.
     """
+    if not target_path.exists():
+        return
+    if next(target_path.iterdir(), None) is None:
+        return
 
-    dataset_id: str
-    version_tag: str | None
+    dataset_description_path = target_path / _DATASET_DESCRIPTION_FILENAME
+    if not dataset_description_path.exists():
+        return
 
-    @classmethod
-    def from_dir(cls, path: Path) -> LocalDataset | None:
-        """Inspect ``path`` and return a :class:`LocalDataset` if one exists.
+    # ``utf-8-sig`` strips a UTF-8 BOM if present and is otherwise
+    # equivalent to ``utf-8``. Some editors (legacy Windows Notepad,
+    # Excel CSV-export pipelines) prepend a BOM that would otherwise
+    # turn the first key into ``"﻿DatasetDOI"`` and silently fail
+    # the DOI check.
+    try:
+        payload = json.loads(
+            dataset_description_path.read_text(encoding="utf-8-sig")
+        )
+    except json.JSONDecodeError as exc:
+        raise LocalTargetError(
+            f"Could not parse local {dataset_description_path} as JSON."
+        ) from exc
 
-        Returns ``None`` in three "no compatibility check needed" cases:
+    doi = payload.get("DatasetDOI")
+    if doi is None:
+        raise LocalTargetError(
+            'Local "dataset_description.json" does not contain "DatasetDOI".'
+        )
+    if not isinstance(doi, str):
+        raise LocalTargetError('Local "DatasetDOI" must be a string.')
+    local_doi = doi.removeprefix("doi:")
+    local_dataset_id = local_doi.removeprefix("10.82901/nemar.")
 
-        1. ``path`` does not exist.
-        2. ``path`` exists but is empty.
-        3. ``path`` is non-empty but has no ``dataset_description.json``
-           (the "let interrupted downloads resume" case — callers
-           still want to log this; see the resume notice in :func:`_run`).
+    version = payload.get("Version")
+    if version is not None and not isinstance(version, str):
+        raise LocalTargetError('Local "Version" must be a string when present.')
+    local_version_tag = (
+        _normalize_version_tag(version) if version is not None else None
+    )
 
-        Returns a populated instance when ``dataset_description.json``
-        is present. Raises :class:`LocalTargetError` if the file is present
-        but malformed (bad JSON, missing/non-string ``DatasetDOI``,
-        non-string ``Version``) so silent corruption can never sneak
-        through.
-        """
-        if not path.exists():
-            return None
-        if next(path.iterdir(), None) is None:
-            return None
+    expected_doi = _DOI_PREFIX_TEMPLATE.format(dataset=dataset)
+    canonical_local_doi = _DOI_PREFIX_TEMPLATE.format(dataset=local_dataset_id)
+    if not canonical_local_doi.startswith(expected_doi):
+        raise LocalTargetError(
+            "The target directory appears to contain a different NEMAR dataset. "
+            f'Local DatasetDOI: "{canonical_local_doi}". '
+            f"Requested dataset: {dataset}."
+        )
 
-        dataset_description_path = path / _DATASET_DESCRIPTION_FILENAME
-        if not dataset_description_path.exists():
-            return None
+    if local_version_tag is None:
+        raise LocalTargetError(
+            'Local "dataset_description.json" matches the requested dataset DOI '
+            'but does not contain a "Version" field. This could lead to '
+            "overwriting data from a different version. Use an empty target "
+            "directory, or remove the existing files if you intend to "
+            "re-download."
+        )
 
-        # ``utf-8-sig`` strips a UTF-8 BOM if present and is otherwise
-        # equivalent to ``utf-8``. Some editors (legacy Windows
-        # Notepad, Excel CSV-export pipelines) prepend a BOM that
-        # would otherwise turn the first key into ``"﻿DatasetDOI"``
-        # and silently fail the DOI check.
-        try:
-            payload = json.loads(
-                dataset_description_path.read_text(encoding="utf-8-sig")
-            )
-        except json.JSONDecodeError as exc:
-            raise LocalTargetError(
-                f"Could not parse local {dataset_description_path} as JSON."
-            ) from exc
-
-        doi = payload.get("DatasetDOI")
-        if doi is None:
-            raise LocalTargetError(
-                'Local "dataset_description.json" does not contain "DatasetDOI".'
-            )
-        if not isinstance(doi, str):
-            raise LocalTargetError('Local "DatasetDOI" must be a string.')
-        doi = doi.removeprefix("doi:")
-
-        dataset_id = doi.removeprefix("10.82901/nemar.")
-
-        version = payload.get("Version")
-        if version is not None and not isinstance(version, str):
-            raise LocalTargetError('Local "Version" must be a string when present.')
-        version_tag = _normalize_version_tag(version) if version is not None else None
-
-        return cls(dataset_id=dataset_id, version_tag=version_tag)
-
-    def assert_compatible_with(self, *, dataset: str, tag: str) -> None:
-        """Raise if downloading ``dataset`` ``tag`` here would clobber data.
-
-        * Raises :class:`LocalTargetError` if the local DOI prefix names a
-          *different* dataset.
-        * Raises :class:`LocalTargetError` if the DOI matches but no
-          Version was recorded — continuing would risk silently
-          mixing two versions of the same dataset.
-        * Raises :class:`LocalVersionMismatchError` (a subclass of both
-          :class:`LocalTargetError` and the builtin :class:`FileExistsError`)
-          if the DOI matches but the Version is a different tag than the
-          one requested.
-
-        Pure: no filesystem access. ``self`` already carries the
-        parsed identity.
-        """
-        expected_doi = _DOI_PREFIX_TEMPLATE.format(dataset=dataset)
-        local_doi = _DOI_PREFIX_TEMPLATE.format(dataset=self.dataset_id)
-        if not local_doi.startswith(expected_doi):
-            raise LocalTargetError(
-                "The target directory appears to contain a different NEMAR dataset. "
-                f'Local DatasetDOI: "{local_doi}". Requested dataset: {dataset}.'
-            )
-
-        if self.version_tag is None:
-            raise LocalTargetError(
-                'Local "dataset_description.json" matches the requested dataset DOI '
-                'but does not contain a "Version" field. This could lead to '
-                "overwriting data from a different version. Use an empty target "
-                "directory, or remove the existing files if you intend to "
-                "re-download."
-            )
-
-        if self.version_tag != tag:
-            raise LocalVersionMismatchError(
-                f"You requested {dataset} {tag}, but {self.version_tag} exists "
-                "locally in the target directory. Use an empty target directory "
-                "or request the same version."
-            )
+    if local_version_tag != tag:
+        raise LocalVersionMismatchError(
+            f"You requested {dataset} {tag}, but {local_version_tag} exists "
+            "locally in the target directory. Use an empty target directory "
+            "or request the same version."
+        )
 
 
 def download(
@@ -307,10 +272,10 @@ def _run(request: DownloadRequest) -> None:
         selected_files = [
             file for file in selected_files if file.git_sha1 is not None
         ]
-    local = LocalDataset.from_dir(request.target_path)
-    if local is not None:
-        local.assert_compatible_with(dataset=request.dataset, tag=selected_tag)
-    elif _target_has_files_without_description(request.target_path):
+    _check_local_compatibility(
+        request.target_path, dataset=request.dataset, tag=selected_tag
+    )
+    if _target_has_files_without_description(request.target_path):
         # Resume-friendly behavior: a non-empty target without a
         # ``dataset_description.json`` (e.g. a previous interrupted
         # download) is allowed to proceed. Log it so operators can
@@ -423,14 +388,17 @@ def list_dataset_versions(
 def _target_has_files_without_description(target_dir: Path) -> bool:
     """Report whether ``target_dir`` has files but no ``dataset_description.json``.
 
-    The case where the orchestrator logs the resume-friendly notice and
-    proceeds without a compatibility check. Kept separate from
-    :class:`LocalDataset` because it is a fact about the directory's
-    contents, not about the dataset identity.
+    The case where the orchestrator logs the resume-friendly notice
+    after :func:`_check_local_compatibility` returns silently. Kept
+    separate because it is a fact about the directory's contents, not
+    about the dataset identity — the compatibility checker treats
+    these three "nothing to compare" cases (missing dir, empty dir,
+    no description) as indistinguishable, but the orchestrator wants
+    to log only the third.
     """
     if not target_dir.exists():
         return False
     if next(target_dir.iterdir(), None) is None:
         return False
-    return not (target_dir / "dataset_description.json").exists()
+    return not (target_dir / _DATASET_DESCRIPTION_FILENAME).exists()
 

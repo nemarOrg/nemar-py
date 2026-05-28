@@ -14,7 +14,7 @@ import httpx
 import pytest
 
 from nemar._bids import BidsQuery
-from nemar._download import LocalDataset
+from nemar._download import _check_local_compatibility
 from nemar._endpoint import DataEndpoint
 from nemar._models import DatasetFile, VersionManifest, parse_dataset_index
 from nemar._retry import RetryPolicy
@@ -107,7 +107,7 @@ def test_selection_zero_match_is_a_runtime_error():
 
 
 def test_local_version_mismatch_is_a_file_exists_error(tmp_path: Path):
-    """LocalDataset.assert_compatible_with raises FileExistsError on version drift.
+    """_check_local_compatibility raises FileExistsError on version drift.
 
     Legacy callers MUST be able to catch FileExistsError, not just NemarError —
     and the message MUST name both versions so a user can act on it.
@@ -117,10 +117,8 @@ def test_local_version_mismatch_is_a_file_exists_error(tmp_path: Path):
         '{"DatasetDOI": "doi:10.82901/nemar.nm000132", "Version": "v1.0.0"}',
         encoding="utf-8",
     )
-    local = LocalDataset.from_dir(tmp_path)
-    assert local is not None
     with pytest.raises(FileExistsError, match="v2.0.0.*v1.0.0") as info:
-        local.assert_compatible_with(dataset="nm000132", tag="v2.0.0")
+        _check_local_compatibility(tmp_path, dataset="nm000132", tag="v2.0.0")
     # Same exception is ALSO a LocalVersionMismatchError and a NemarError.
     assert isinstance(info.value, LocalVersionMismatchError)
     assert isinstance(info.value, LocalTargetError)
@@ -134,12 +132,10 @@ def test_local_doi_mismatch_is_a_runtime_error(tmp_path: Path):
         '{"DatasetDOI": "doi:10.82901/nemar.nm999999", "Version": "v1.0.0"}',
         encoding="utf-8",
     )
-    local = LocalDataset.from_dir(tmp_path)
-    assert local is not None
     with pytest.raises(
         RuntimeError, match="different NEMAR dataset"
     ) as info:
-        local.assert_compatible_with(dataset="nm000132", tag="v1.0.0")
+        _check_local_compatibility(tmp_path, dataset="nm000132", tag="v1.0.0")
     assert isinstance(info.value, LocalTargetError)
     # DOI mismatch is NOT a FileExistsError — only version mismatch is.
     assert not isinstance(info.value, FileExistsError)
