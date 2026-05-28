@@ -34,20 +34,24 @@ dependencies = [
   "tqdm",
   "typer>=0.12",
   "wcmatch>=10.1",
+  # DataLad is the first-layer transfer backend (HTTPS is the fallback).
+  # ``git-annex`` is the Haskell binary DataLad shells out to;
+  # ``psychoinformatics-de`` ships it as a self-contained PyPI wheel
+  # (linux / mac / windows). Pinning it here means
+  # ``pip install nemar-py`` is enough — users no longer need to
+  # ``brew install git-annex`` / ``apt install git-annex`` separately.
+  "datalad>=0.19",
+  "git-annex>=10",
 ]
 dynamic = ["version"]
 
 [project.optional-dependencies]
-# DataLad is the optional first-layer transfer backend. The core install
-# stays lean because the ``datalad`` wheel pulls in a heavy graph
-# (git-annex via the system package manager, rdflib, iso8601, …). Users
-# who want the layered DataLad → HTTPS transfer install with:
-#
-#     pip install nemar-py[datalad]
-#
-# Without the extra, ``--downloader datalad`` and the ``"auto"`` path
-# silently degrade to the HTTPS-only backends (with a tqdm notice).
-datalad = ["datalad>=0.19"]
+# Kept as a no-op alias for back-compat: ``pip install nemar-py[datalad]``
+# was the documented way to opt in before DataLad became a default
+# dependency. The empty list means the extra installs nothing extra
+# (the dep is already in ``[project.dependencies]``); existing pins
+# and lockfiles keep resolving.
+datalad = []
 
 [project.urls]
 Homepage = "https://github.com/nemarOrg/nemar-py"

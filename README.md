@@ -5,9 +5,10 @@ Python + CLI client for downloading public **NEMAR** datasets (BIDS / EEG / MEG 
 ## Install
 
 ```shell
-pip install nemar-py            # HTTPS-only
-pip install nemar-py[datalad]   # + DataLad layer (HTTPS fallback)
+pip install nemar-py
 ```
+
+DataLad and the `git-annex` binary both ship in the default install — no system package manager step required (the `git-annex` PyPI wheel from `psychoinformatics-de` bundles the Haskell binary for Linux, macOS, and Windows).
 
 ## Quick start
 
@@ -80,7 +81,7 @@ nemar.download(
 ## Behaviour
 
 - Starts from `https://data.nemar.org/{dataset}/`. No auth, no S3 fallback.
-- When advertised and installed, **DataLad** is tried first; HTTPS resumes via Range/206 on any DataLad failure.
+- **DataLad is the default first layer**; HTTPS resumes via Range/206 on any DataLad failure (missing sibling, network error, …).
 - BIDS root files (`dataset_description.json`, `participants.tsv`/`json`, `README*`, `CHANGES`, `LICENSE`) are always kept — even with `--include` / `--exclude`.
 
 ## Reference implementations
