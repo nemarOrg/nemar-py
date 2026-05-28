@@ -24,12 +24,6 @@ from pathlib import Path
 
 import httpx
 import pytest
-from chaostoxi.toxic.actions import (
-    create_bandwith_degradation_toxic,
-    create_latency_toxic,
-    create_limiter_toxic,
-    delete_toxic,
-)
 
 from nemar._errors import TransferError
 from nemar._models import DatasetFile
@@ -42,6 +36,25 @@ from tests.fixtures.factories import (
     make_manifest_list,
 )
 from tests.fixtures.toxiproxy import ChaosHandle
+
+# ``chaostoolkit-toxiproxy`` is only in the dev dependency group; CI's
+# minimal install (pytest + httpserver + trustme + hypothesis) does not
+# pull it. ``pytest.importorskip`` raises ``pytest.skip`` at module
+# load when the package is missing, so the whole module's tests are
+# skipped rather than crashing pytest collection on CI.
+_chaostoxi_actions = pytest.importorskip(
+    "chaostoxi.toxic.actions",
+    reason=(
+        "chaostoolkit-toxiproxy not installed; install the dev dependency "
+        "group to enable chaos tests."
+    ),
+)
+create_bandwith_degradation_toxic = (
+    _chaostoxi_actions.create_bandwith_degradation_toxic
+)
+create_latency_toxic = _chaostoxi_actions.create_latency_toxic
+create_limiter_toxic = _chaostoxi_actions.create_limiter_toxic
+delete_toxic = _chaostoxi_actions.delete_toxic
 
 pytestmark = pytest.mark.integration
 
