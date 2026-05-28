@@ -33,29 +33,32 @@ dependencies = [
   "tqdm",
   "typer>=0.12",
   "wcmatch>=10.1",
-  # DataLad is the first-layer transfer backend (HTTPS is the fallback).
-  # ``git-annex`` is the Haskell binary DataLad shells out to;
-  # ``psychoinformatics-de`` ships it as a self-contained PyPI wheel
-  # (linux / mac / windows). Pinning it here means
-  # ``pip install nemar-py`` is enough — users no longer need to
-  # ``brew install git-annex`` / ``apt install git-annex`` separately.
-  "datalad>=0.19",
-  "git-annex>=10",
   # Direct S3 transfer layer — anonymous public-read against
   # ``nemar.s3.us-east-2.amazonaws.com``. The wheel is pure-Python and
   # ``eegdash`` (which uses the same bucket) has been running this in
-  # production for years, so the contract is well-exercised.
+  # production for years, so the contract is well-exercised. This is a
+  # default dependency because the ``auto`` chain leads with S3.
   "s3fs>=2024.1",
 ]
 dynamic = ["version"]
 
 [project.optional-dependencies]
-# Kept as a no-op alias for back-compat: ``pip install nemar-py[datalad]``
-# was the documented way to opt in before DataLad became a default
-# dependency. The empty list means the extra installs nothing extra
-# (the dep is already in ``[project.dependencies]``); existing pins
-# and lockfiles keep resolving.
-datalad = []
+# DataLad is the optional second transfer layer. Opt in with:
+#
+#     pip install nemar-py[datalad]
+#
+# ``datalad`` shells out to the ``git-annex`` Haskell binary;
+# ``psychoinformatics-de`` ships it as a self-contained PyPI wheel
+# (linux / mac / windows), so the extra is fully self-contained — no
+# ``brew install git-annex`` / ``apt install git-annex`` system step.
+# Without the extra, ``--downloader datalad`` and the ``auto`` chain's
+# DataLad layer degrade gracefully to the S3 / HTTPS backends: a missing
+# import surfaces as ``DataLadError``, which the layered backend treats
+# as a fall-through signal.
+datalad = [
+  "datalad>=0.19",
+  "git-annex>=10",
+]
 
 [project.urls]
 Homepage = "https://github.com/nemarOrg/nemar-py"
@@ -89,6 +92,11 @@ dev = [
   # endpoint so ``s3fs`` can talk to a real-shaped API without
   # touching AWS.
   "moto[s3,server]>=5",
+  # DataLad is an optional runtime extra (see [project.optional-dependencies]),
+  # but the dev environment installs it so the DataLad-backend tests
+  # exercise the real import seam. ``git-annex`` is the bundled binary.
+  "datalad>=0.19",
+  "git-annex>=10",
 ]
 
 [build-system]

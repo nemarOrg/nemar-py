@@ -24,6 +24,7 @@ than against the real ``datalad`` package.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -428,11 +429,14 @@ class TestImportSeam:
     def test_real_import_returns_bundle_when_datalad_is_available(self) -> None:
         """``_import_datalad`` returns a populated bundle from the real package.
 
-        ``datalad`` is a hard dependency, so it is always installed in the
-        dev/test environment. Calling the seam directly pins the wiring:
-        api + Dataset + a 2-tuple of exception classes all land on the
-        bundle in the expected slots.
+        ``datalad`` is an optional extra (``pip install nemar-py[datalad]``);
+        it is installed in the dev/CI environment but may be absent in a
+        lean install, so this test skips when it is not importable. When
+        present, calling the seam directly pins the wiring: api + Dataset
+        + a 2-tuple of exception classes all land on the bundle in the
+        expected slots.
         """
+        pytest.importorskip("datalad")
         bundle = _datalad._import_datalad()
         assert isinstance(bundle, _DataLadModules)
         assert bundle.api is not None
@@ -443,3 +447,20 @@ class TestImportSeam:
             isinstance(exc, type) and issubclass(exc, BaseException)
             for exc in bundle.exceptions
         )
+
+    def test_missing_datalad_import_raises_datalad_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing optional ``datalad`` surfaces as :class:`DataLadError`.
+
+        This is the fall-through signal the layered backend catches —
+        without the ``ImportError`` → ``DataLadError`` conversion in
+        :func:`_import_datalad`, a lean install (no ``[datalad]`` extra)
+        would raise a bare ``ImportError`` that escapes the fallback and
+        aborts the whole download. Simulated by poisoning ``sys.modules``
+        so the import fails regardless of what is installed.
+        """
+        monkeypatch.setitem(sys.modules, "datalad", None)
+        monkeypatch.setitem(sys.modules, "datalad.api", None)
+        with pytest.raises(DataLadError, match="DataLad is not installed"):
+            _datalad._import_datalad()

@@ -43,10 +43,26 @@ class _DataLadModules:
 
 
 def _import_datalad() -> _DataLadModules:
-    """Lazily import the DataLad surfaces so ``import nemar`` stays cheap."""
-    import datalad.api as api
-    from datalad.distribution.dataset import Dataset
-    from datalad.support.exceptions import CommandError, IncompleteResultsError
+    """Lazily import the DataLad surfaces so ``import nemar`` stays cheap.
+
+    DataLad is an optional extra (``pip install nemar-py[datalad]``). When
+    it is not installed, the import fails and we convert the ``ImportError``
+    into a :class:`DataLadError` — the exception the wrapping
+    :class:`LayeredBackend` catches to fall through to the S3 / HTTPS
+    layers. Without this conversion a missing optional dependency would
+    raise a bare ``ImportError`` that escapes the fallback and aborts the
+    whole download.
+    """
+    try:
+        import datalad.api as api
+        from datalad.distribution.dataset import Dataset
+        from datalad.support.exceptions import CommandError, IncompleteResultsError
+    except ImportError as exc:
+        raise DataLadError(
+            "DataLad is not installed. Install the optional extra with "
+            "'pip install nemar-py[datalad]', or use downloader='s3' / "
+            "'python' (the auto chain already falls back to HTTPS)."
+        ) from exc
 
     return _DataLadModules(
         api=api,

@@ -27,7 +27,11 @@ jobs:
           cache: pip
       - name: Install
         run: |
-          pip install -e . \
+          # Install the optional [datalad] extra here so the DataLad
+          # backend's real-import test runs in CI. The minimum-Python job
+          # below stays lean (no extra) to prove the default install works
+          # without datalad.
+          pip install -e ".[datalad]" \
             ruff pyright pytest pytest-cov pytest-httpserver trustme hypothesis build
           sudo apt-get update && sudo apt-get install -y aria2
       - name: Lint

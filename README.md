@@ -5,10 +5,15 @@ Python + CLI client for downloading public **NEMAR** datasets (BIDS / EEG / MEG 
 ## Install
 
 ```shell
-pip install nemar-py
+pip install nemar-py            # S3 + HTTPS backends
+pip install nemar-py[datalad]   # + the optional DataLad layer
 ```
 
-DataLad and the `git-annex` binary both ship in the default install — no system package manager step required (the `git-annex` PyPI wheel from `psychoinformatics-de` bundles the Haskell binary for Linux, macOS, and Windows).
+The default install uses the direct-S3 and HTTPS backends. The optional
+`[datalad]` extra adds the DataLad layer; it bundles the `git-annex` binary
+via the `psychoinformatics-de` PyPI wheel (Linux, macOS, Windows), so no
+system package step is needed. Without the extra, `--downloader datalad` and
+the `auto` chain's DataLad layer fall through to S3 / HTTPS automatically.
 
 ## Quick start
 
@@ -81,9 +86,9 @@ nemar.download(
 ## Behaviour
 
 - Catalog (`index`, `version`, `manifest`) is fetched from `https://data.nemar.org/{dataset}/`. No auth.
-- File bytes use a **three-layer chain: S3 → DataLad → HTTPS**.
+- File bytes use a layered chain: **S3 → (DataLad) → HTTPS**.
   - **S3** is tried first — anonymous public-read against `nemar.s3.us-east-2.amazonaws.com`, content-addressed at `<dataset>/objects/<git-annex-key>` (`eegdash`-style direct fetch).
-  - **DataLad** is the second layer when the dataset index advertises a `datalad_url`.
+  - **DataLad** is an optional middle layer, active only when the `[datalad]` extra is installed *and* the dataset index advertises a `datalad_url`. Absent the extra, this layer is skipped (a missing import is caught and falls through).
   - **HTTPS** through `data.nemar.org` is the always-available fallback, with Range/206 resume.
 - BIDS root files (`dataset_description.json`, `participants.tsv`/`json`, `README*`, `CHANGES`, `LICENSE`) are always kept — even with `--include` / `--exclude`.
 
