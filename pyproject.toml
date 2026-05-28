@@ -71,9 +71,11 @@ dev = [
   # [tool.mutmut] below. Run with `uv run mutmut run`.
   "mutmut>=3.0",
   # Network-chaos fixtures for tests/integration/test_chaos.py.
-  # Requires the ``toxiproxy-server`` binary on PATH (brew install
-  # toxiproxy) and ``NEMAR_CHAOS=1`` to actually run the tests.
-  "toxiproxy-python>=0.1",
+  # Uses chaostoolkit-toxiproxy's functional helpers (create_proxy,
+  # create_latency_toxic, create_limiter_toxic, …) directly. Also
+  # requires the ``toxiproxy-server`` binary on PATH
+  # (brew install toxiproxy) and ``NEMAR_CHAOS=1`` to actually run.
+  "chaostoolkit-toxiproxy>=0.3",
 ]
 
 [build-system]

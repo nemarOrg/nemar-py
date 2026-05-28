@@ -7,6 +7,12 @@ retry / Range-resume / timeout machinery handles real-world TCP
 nastiness — not just the HTTP-status-code mocks the rest of the
 integration suite drives.
 
+Toxics are added through ``chaostoolkit-toxiproxy``'s functional
+helpers (``create_latency_toxic``, ``create_bandwith_degradation_toxic``,
+``create_limiter_toxic``), all routed through the per-test
+:class:`~tests.fixtures.toxiproxy.ChaosHandle`'s ``proxy_name`` and
+shared toxiproxy ``config``.
+
 Gated by ``NEMAR_CHAOS=1``; requires ``toxiproxy-server`` on PATH.
 """
 
@@ -18,11 +24,23 @@ from pathlib import Path
 
 import httpx
 import pytest
+from chaostoxi.toxic.actions import (
+    create_bandwith_degradation_toxic,
+    create_latency_toxic,
+    create_limiter_toxic,
+    delete_toxic,
+)
 
+from nemar._errors import TransferError
 from nemar._models import DatasetFile
 from nemar._retry import RetryPolicy
 from nemar._verification import VerifyPolicy, VerifyResult, check
 from nemar.transfer import download_one
+from tests.fixtures.factories import (
+    make_index,
+    make_manifest_entry,
+    make_manifest_list,
+)
 from tests.fixtures.toxiproxy import ChaosHandle
 
 pytestmark = pytest.mark.integration
@@ -31,17 +49,7 @@ pytestmark = pytest.mark.integration
 def _publish_single_file(
     nemar_endpoint, *, path: str, content: bytes
 ) -> DatasetFile:
-    """Publish one file via the HTTPS fixture and return its DatasetFile.
-
-    Uses the same factory pattern as the rest of the integration suite
-    so the chaos tests share fixture infrastructure.
-    """
-    from tests.fixtures.factories import (
-        make_index,
-        make_manifest_entry,
-        make_manifest_list,
-    )
-
+    """Publish one file via the HTTPS fixture and return its DatasetFile."""
     index = make_index(dataset="nm000132")
     entry = make_manifest_entry(path=path, content=content)
     manifest = make_manifest_list([entry])
@@ -60,12 +68,7 @@ def _publish_single_file(
 
 
 def _file_via_chaos(file: DatasetFile, chaos: ChaosHandle) -> DatasetFile:
-    """Rewrite a DatasetFile so its ``url`` traverses the chaos proxy.
-
-    The fixture publishes at ``https://localhost:<fixture_port>/...``;
-    we swap the port for the chaos listener so every byte the client
-    fetches goes through toxiproxy first.
-    """
+    """Rewrite a DatasetFile so its ``url`` traverses the chaos proxy."""
     parsed = httpx.URL(file.url)
     rewritten = parsed.copy_with(port=chaos.listen_port)
     return DatasetFile(
@@ -95,10 +98,11 @@ def test_download_succeeds_with_high_latency(
     file = _publish_single_file(
         nemar_endpoint, path="data/latency.bin", content=content
     )
-    chaos_proxy.add_toxic(
-        name="rtt-200ms",
-        type="latency",
-        attributes={"latency": 200},
+    create_latency_toxic(
+        for_proxy=chaos_proxy.proxy_name,
+        toxic_name="rtt-200ms",
+        latency=200,
+        configuration=chaos_proxy.config,
     )
 
     via_chaos = _file_via_chaos(file, chaos_proxy)
@@ -121,17 +125,17 @@ def test_download_completes_under_bandwidth_throttle(
 
     Pins that the stream timeout governs per-chunk, not whole-body,
     so a long-running slow transfer does not get killed
-    prematurely. The wall-clock budget here is ~1 s plus jitter;
-    we give it 30 s.
+    prematurely.
     """
-    content = b"slow-but-steady" * 1024  # ~15 KiB, small enough to ride 16 KB/s
+    content = b"slow-but-steady" * 1024  # ~15 KiB
     file = _publish_single_file(
         nemar_endpoint, path="data/throttle.bin", content=content
     )
-    chaos_proxy.add_toxic(
-        name="throttle",
-        type="bandwidth",
-        attributes={"rate": 16},  # KB/s
+    create_bandwith_degradation_toxic(
+        for_proxy=chaos_proxy.proxy_name,
+        toxic_name="throttle",
+        rate=16,  # KB/s
+        configuration=chaos_proxy.config,
     )
 
     via_chaos = _file_via_chaos(file, chaos_proxy)
@@ -142,13 +146,12 @@ def test_download_completes_under_bandwidth_throttle(
 
     assert result is VerifyResult.OK
     assert target.read_bytes() == content
-    # Sanity: the throttle was actually active. A fast connection would
-    # have finished in milliseconds, not seconds.
+    # Sanity: the throttle was actually active.
     assert elapsed >= 0.3, f"transfer too fast ({elapsed:.2f}s) for throttle"
 
 
 # ---------------------------------------------------------------------------
-# Scenario 3 — Mid-stream drop, then retry succeeds
+# Scenario 3 — Mid-stream drop, then clean retry resumes via Range/206
 # ---------------------------------------------------------------------------
 
 
@@ -157,41 +160,24 @@ def test_partial_bytes_survive_drop_and_resume_completes(
 ) -> None:
     """A drop mid-stream + clean retry round-trip reconstitutes the file.
 
-    Two-phase contract:
-
-    1. With a ``limit_data`` toxic cutting every connection at
-       1024 bytes, the first ``download_one`` (zero retries)
-       surfaces a :class:`TransferError`. Partial bytes are on
-       disk because the per-attempt writer flushes as it goes.
-    2. After we clear the toxic, a second ``download_one`` call
-       sees the partial, issues ``Range: bytes=<N>-``, and the
-       fixture server serves the rest. The final file matches the
-       manifest sha256.
-
-    This pins two separate guarantees: (a) drops surface as a
-    typed ``TransferError`` rather than corrupting silently, and
-    (b) the resume contract works end-to-end against a real TCP
-    cut, not just an HTTP-status-code mock.
+    Two-phase contract: first attempt fails with a partial on disk,
+    second attempt resumes via Range/206 and verifies clean.
     """
-    # 100 KiB body, cut at ~32 KiB of TLS-encrypted transmit. That's
-    # comfortably past the handshake + headers so we are guaranteed to
-    # have written *some* body bytes before the cut.
     content = b"R" * (100 * 1024)
     file = _publish_single_file(
         nemar_endpoint, path="data/drop.bin", content=content
     )
     nemar_endpoint.serve_with_range(f"/nm000132/v1.0.0/{file.path}")
-    chaos_proxy.add_toxic(
-        name="cut-32k",
-        type="limit_data",
-        attributes={"bytes": 32768},
+    create_limiter_toxic(
+        for_proxy=chaos_proxy.proxy_name,
+        toxic_name="cut-32k",
+        bytes_limit=32768,
+        configuration=chaos_proxy.config,
     )
     via_chaos = _file_via_chaos(file, chaos_proxy)
     target = tmp_path / file.path
 
-    # Phase 1: drop fails fast (no retries) → TransferError, partial on disk.
-    from nemar._errors import TransferError
-
+    # Phase 1: drop fails fast → TransferError, partial on disk.
     with pytest.raises(TransferError):
         download_one(
             via_chaos,
@@ -200,35 +186,33 @@ def test_partial_bytes_survive_drop_and_resume_completes(
         )
     on_disk = target.stat().st_size
     assert 0 < on_disk < file.size, (
-        f"expected a partial file 0 < N < {file.size}, got {on_disk} B"
+        f"expected partial 0 < N < {file.size}, got {on_disk} B"
     )
 
     # Phase 2: clear the toxic and resume.
-    chaos_proxy.proxy.destroy_toxic("cut-32k")
+    delete_toxic(
+        for_proxy=chaos_proxy.proxy_name,
+        toxic_name="cut-32k",
+        configuration=chaos_proxy.config,
+    )
     result = download_one(via_chaos, target)
     assert result is VerifyResult.OK
     assert target.read_bytes() == content
 
 
 # ---------------------------------------------------------------------------
-# Scenario 4 — Verifier guards bad bytes even through a happy network
+# Scenario 4 — Verifier guards bad bytes
 # ---------------------------------------------------------------------------
 
 
 def test_post_transfer_verifier_catches_corruption(
     chaos_proxy: ChaosHandle, nemar_endpoint, tmp_path: Path
 ) -> None:
-    """A toxic that flips bytes en route must trigger a hash mismatch.
+    """A claimed-hash mismatch must surface as ``VerifyResult.HASH_MISMATCH``.
 
-    Pins the contract that the post-transfer verify is the final
-    word: even if a buggy transport / bad CDN smuggled in wrong
-    bytes (which network toxics can simulate), ``check(...)`` will
-    flag it.
-
-    Toxiproxy does not have a built-in byte-flip toxic, so we
-    cheat: write content A to the fixture, claim its size+sha256 as
-    if it were content B (random), and confirm the verifier
-    rejects with HASH_MISMATCH.
+    Toxiproxy does not have a built-in byte-flip toxic, so we cheat:
+    write content A to the fixture, claim its size+sha256 as if it were
+    content B, and confirm the verifier flags the mismatch.
     """
     real_content = b"genuine bytes" * 64
     fake_sha = hashlib.sha256(b"impostor").hexdigest()
@@ -245,6 +229,6 @@ def test_post_transfer_verifier_catches_corruption(
     )
 
     target = tmp_path / file.path
-    download_one(tampered, target)  # writes bytes, returns
+    download_one(tampered, target)
     result = check(tampered, target, VerifyPolicy())
     assert result is VerifyResult.HASH_MISMATCH

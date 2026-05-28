@@ -5,17 +5,26 @@ and the nemar-py client under test. Toxiproxy is a TCP-layer proxy:
 TLS handshakes and HTTP semantics pass through unchanged, but every
 byte can have latency, bandwidth, or transient-failure toxics applied.
 
+Implementation
+--------------
+
+The chaos primitives come from the ``chaostoolkit-toxiproxy``
+extension (PyPI: ``chaostoolkit-toxiproxy``). It exposes functional
+helpers — ``create_proxy``, ``delete_proxy``, ``create_latency_toxic``,
+``create_bandwith_degradation_toxic``, ``create_limiter_toxic``,
+``delete_toxic`` — that each take a ``configuration`` dict pointing
+at the toxiproxy API endpoint. We boot ``toxiproxy-server`` as a
+session-scoped subprocess and yield a per-test :class:`ChaosHandle`
+that knows its proxy name + listen port + the shared configuration.
+
 Usage
 -----
 
 A test asks for the ``chaos_proxy`` fixture, which yields a
 :class:`ChaosHandle`. The handle exposes :meth:`upstream_url` (a
-nemar-py-compatible HTTPS URL that goes through the chaos hop) and
-:meth:`add_toxic` / :meth:`clear_toxics` for in-test scenario control.
-
-The toxiproxy server is launched once per session as a child process
-on an ephemeral port. The Python client (:pypi:`toxiproxy-python`)
-talks to it over HTTP on that port.
+nemar-py-compatible HTTPS URL that goes through the chaos hop) plus
+the ``proxy_name`` / ``config`` pair that every ``chaostoxi.*``
+helper needs.
 
 Gating
 ------
@@ -42,21 +51,27 @@ from urllib.parse import urlparse
 import pytest
 from pytest_httpserver import HTTPServer
 
-# ``toxiproxy-python`` is in the dev dependency group but is not part
-# of the default CI install (which only pulls pytest + a handful of
-# helpers). Importing it at module top would crash conftest.py on
+# ``chaostoolkit-toxiproxy`` is in the dev dependency group but is not
+# part of the default CI install (which only pulls pytest + a handful
+# of helpers). Importing it at module top would crash conftest.py on
 # every CI run. Wrap it in a try/except so the rest of the test suite
 # loads cleanly and the chaos fixtures skip when the package is
 # missing.
 try:
-    import toxiproxy
-    from toxiproxy.api import APIConsumer
+    from chaostoxi.proxy.actions import (
+        create_proxy as _create_proxy,
+    )
+    from chaostoxi.proxy.actions import (
+        delete_proxy as _delete_proxy,
+    )
+    from chaostoxi.toxic.actions import delete_toxic as _delete_toxic
 
-    _toxiproxy_import_error: ImportError | None = None
+    _import_error: ImportError | None = None
 except ImportError as exc:
-    toxiproxy = None  # type: ignore[assignment]
-    APIConsumer = None  # type: ignore[assignment]
-    _toxiproxy_import_error = exc
+    _create_proxy = None  # type: ignore[assignment]
+    _delete_proxy = None  # type: ignore[assignment]
+    _delete_toxic = None  # type: ignore[assignment]
+    _import_error = exc
 
 CHAOS_GATE = "NEMAR_CHAOS"
 SKIP_REASON = (
@@ -69,46 +84,34 @@ SKIP_REASON = (
 class ChaosHandle:
     """Per-test view of a toxiproxy proxy fronting the local HTTPS fixture.
 
-    Each test gets a fresh proxy. Toxics added during the test are
-    cleared on teardown so scenarios cannot leak.
+    Carries everything the chaostoolkit-toxiproxy helpers need to
+    operate against this specific proxy: the ``proxy_name`` and the
+    ``config`` (a dict containing ``toxiproxy_url`` pointing at the
+    session-scoped server).
+
+    Example::
+
+        from chaostoxi.toxic.actions import create_latency_toxic
+        create_latency_toxic(
+            for_proxy=handle.proxy_name,
+            toxic_name="lat",
+            latency=200,
+            configuration=handle.config,
+        )
     """
 
-    # Typed as ``Any`` because ``toxiproxy`` may be ``None`` in the
-    # default-install environment; the chaos fixtures already skip in
-    # that case so ``proxy`` is never accessed when the import failed.
-    proxy: Any
+    proxy_name: str
     listen_port: int
     upstream_host: str
+    # ``Any`` because ``Configuration`` is a typing alias only
+    # importable when ``chaostoolkit-lib`` is installed.
+    config: Any
 
     def upstream_url(self, path: str = "/") -> str:
-        """Return an ``https://localhost:<chaos_port>/<path>`` URL.
-
-        The path is prefixed with ``/`` if missing, matching how
-        nemar-py joins dataset id against ``data_url``.
-        """
+        """Return ``https://localhost:<chaos_port>/<path>`` for the chaos hop."""
         if not path.startswith("/"):
             path = "/" + path
         return f"https://localhost:{self.listen_port}{path}"
-
-    def add_toxic(self, **kwargs: object) -> object:
-        """Attach a toxic to the proxy. See toxiproxy-python docs for shapes.
-
-        Common patterns used by our scenarios:
-
-        * ``add_toxic(name="lat", type="latency", attributes={"latency": 500})``
-          — adds 500 ms latency on every downstream byte.
-        * ``add_toxic(name="bw", type="bandwidth",
-          attributes={"rate": 16})`` — throttles to 16 KB/s.
-        * ``add_toxic(name="cut", type="limit_data",
-          attributes={"bytes": 4096})`` — closes the connection after
-          4 KiB of payload (simulates a mid-stream drop).
-        """
-        return self.proxy.add_toxic(**kwargs)
-
-    def clear_toxics(self) -> None:
-        """Remove every toxic attached to this proxy."""
-        for toxic in list(self.proxy.toxics().values()):
-            toxic.destroy()
 
 
 def _free_port() -> int:
@@ -137,13 +140,18 @@ def _binary_available() -> bool:
 
 
 @pytest.fixture(scope="session")
-def _toxiproxy_server() -> Iterator[toxiproxy.Toxiproxy]:  # type: ignore[name-defined]
-    """Boot ``toxiproxy-server`` once per session."""
+def _toxiproxy_server() -> Iterator[dict[str, Any]]:
+    """Boot ``toxiproxy-server`` once per session.
+
+    Yields the shared ``configuration`` dict every chaostoxi helper
+    needs (it contains ``toxiproxy_url``). Per-test proxies are
+    created in :func:`chaos_proxy` on top of this same config.
+    """
     if os.environ.get(CHAOS_GATE) != "1" or not _binary_available():
         pytest.skip(SKIP_REASON)
-    if _toxiproxy_import_error is not None:
+    if _import_error is not None:
         pytest.skip(
-            f"toxiproxy-python is not installed ({_toxiproxy_import_error}); "
+            f"chaostoolkit-toxiproxy is not installed ({_import_error}); "
             "install the dev dependency group to enable chaos tests."
         )
     api_port = _free_port()
@@ -154,14 +162,10 @@ def _toxiproxy_server() -> Iterator[toxiproxy.Toxiproxy]:  # type: ignore[name-d
     )
     try:
         _wait_for_port(api_port)
-        # toxiproxy-python configures the server endpoint at class level
-        # rather than via constructor args. Mutating the class is OK
-        # here because the fixture is session-scoped (one server, one
-        # API port for the whole pytest run).
-        APIConsumer.host = "127.0.0.1"
-        APIConsumer.port = api_port
-        client = toxiproxy.Toxiproxy()
-        yield client
+        config: dict[str, Any] = {
+            "toxiproxy_url": f"http://127.0.0.1:{api_port}",
+        }
+        yield config
     finally:
         proc.terminate()
         try:
@@ -173,7 +177,7 @@ def _toxiproxy_server() -> Iterator[toxiproxy.Toxiproxy]:  # type: ignore[name-d
 
 @pytest.fixture
 def chaos_proxy(
-    _toxiproxy_server: toxiproxy.Toxiproxy,  # type: ignore[name-defined]
+    _toxiproxy_server: dict[str, Any],
     _nemar_https_server: HTTPServer,
 ) -> Iterator[ChaosHandle]:
     """Per-test toxiproxy proxy in front of the local HTTPS fixture.
@@ -183,6 +187,7 @@ def chaos_proxy(
     :class:`ChaosHandle`, then tears the proxy down. The session-scoped
     server keeps running for other tests.
     """
+    config = _toxiproxy_server
     upstream_url = _nemar_https_server.url_for("/")
     parsed = urlparse(upstream_url)
     upstream_host = parsed.hostname or "127.0.0.1"
@@ -191,23 +196,28 @@ def chaos_proxy(
 
     listen_port = _free_port()
     name = f"nemar-chaos-{threading.get_ident()}-{listen_port}"
-    proxy = _toxiproxy_server.create(
-        upstream=f"127.0.0.1:{upstream_port}",
-        name=name,
-        listen=f"127.0.0.1:{listen_port}",
+    result = _create_proxy(
+        proxy_name=name,
+        upstream_host="127.0.0.1",
+        upstream_port=upstream_port,
+        listen_host="127.0.0.1",
+        listen_port=listen_port,
         enabled=True,
+        configuration=config,
     )
+    assert result is not None, "toxiproxy create_proxy returned None"
     try:
         yield ChaosHandle(
-            proxy=proxy,
+            proxy_name=name,
             listen_port=listen_port,
             upstream_host=upstream_host,
+            config=config,
         )
     finally:
-        # Best-effort teardown: a failing test may leave toxics behind.
-        try:
-            for toxic in list(proxy.toxics().values()):
-                toxic.destroy()
-        except Exception:  # noqa: BLE001 — server may already be gone
-            pass
-        proxy.destroy()
+        _delete_proxy(proxy_name=name, configuration=config)
+
+
+# Re-exports kept narrow so tests do not import directly from chaostoxi
+# at module top — the optional-dep ``try`` block at the top of this
+# module is the single seam.
+delete_toxic = _delete_toxic
