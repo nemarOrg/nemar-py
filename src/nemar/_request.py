@@ -65,6 +65,7 @@ class DownloadRequest:
     verify: VerifyPolicy
     metadata_timeout: float
     no_data: bool
+    trust_existing: bool = False
 
     @classmethod
     def from_kwargs(
@@ -95,6 +96,7 @@ class DownloadRequest:
         stream_timeout: float = 60.0,
         data_url: str = DEFAULT_DATA_URL,
         no_data: bool = False,
+        trust_existing: bool = False,
     ) -> DownloadRequest:
         """Build a request from the public ``download()`` kwargs.
 
@@ -149,6 +151,7 @@ class DownloadRequest:
             verify=verify,
             metadata_timeout=metadata_timeout,
             no_data=no_data,
+            trust_existing=trust_existing,
         )
 
 

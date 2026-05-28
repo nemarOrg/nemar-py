@@ -3,12 +3,12 @@
 The DataLad backend is the first layer of the two-layer transfer model
 described in :mod:`nemar._datalad`. These tests pin four contracts:
 
-1. The optional dependency import (one bundle: api + Dataset + exception
-   classes) is the single seam tests substitute to drive the DataLad
-   code path without ``datalad`` installed.
-2. Every documented DataLad failure surface (missing dep, install
-   error, ``Dataset`` open error, checkout error, ``get`` error)
-   becomes :class:`DataLadError`. Programming bugs (``TypeError`` etc.)
+1. The DataLad import (one bundle: api + Dataset + exception classes)
+   is the single seam tests substitute to drive the DataLad code path
+   without exercising the real ``datalad`` package.
+2. Every documented DataLad failure surface (install error, ``Dataset``
+   open error, checkout error, ``get`` error) becomes
+   :class:`DataLadError`. Programming bugs (``TypeError`` etc.)
    propagate unchanged so a real defect surfaces immediately.
 3. Existing on-disk clones are reused: the second run of a request
    into a populated ``target_dir`` opens via :class:`Dataset` instead
@@ -24,9 +24,6 @@ than against the real ``datalad`` package.
 
 from __future__ import annotations
 
-import builtins
-import importlib
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -266,24 +263,6 @@ class TestDataLadBackendHappyPath:
 
 
 class TestDataLadBackendFailureModes:
-    def test_missing_dep_raises_datalad_error(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """ImportError from the optional dep surfaces as DataLadError."""
-
-        def _raise() -> _DataLadModules:
-            raise DataLadError("DataLad is not installed.")
-
-        monkeypatch.setattr(_datalad, "_import_datalad", _raise)
-        with pytest.raises(DataLadError, match="not installed"):
-            DataLadBackend(datalad_url="https://x/repo.git").transfer(
-                _files(),
-                target_dir=tmp_path,
-                options=_options(),
-                verify=VerifyPolicy(),
-                retry=RetryPolicy.default(),
-            )
-
     def test_install_failure_raises_datalad_error(
         self, fake_bundle: _FakeBundle, tmp_path: Path
     ) -> None:
@@ -446,68 +425,21 @@ class TestLayeredBackend:
 
 
 class TestImportSeam:
-    def test_real_import_returns_bundle_when_datalad_is_available(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """All three sub-imports succeed → a populated bundle comes back.
+    def test_real_import_returns_bundle_when_datalad_is_available(self) -> None:
+        """``_import_datalad`` returns a populated bundle from the real package.
 
-        Drives the success path of :func:`_import_datalad` without
-        requiring the real ``datalad`` install. Patches
-        ``importlib.import_module`` to return tiny stand-ins for each of
-        the three modules the seam reaches into. Pins the wiring: api +
-        Dataset + (CommandError, IncompleteResultsError) tuple all land
-        on the bundle in the expected slots.
+        ``datalad`` is a hard dependency, so it is always installed in the
+        dev/test environment. Calling the seam directly pins the wiring:
+        api + Dataset + a 2-tuple of exception classes all land on the
+        bundle in the expected slots.
         """
-        fake_api = object()
-        fake_dataset_cls = type("FakeDataset", (), {})
-        fake_command_error = type("FakeCommandError", (Exception,), {})
-        fake_incomplete_error = type(
-            "FakeIncompleteResultsError", (Exception,), {}
-        )
-        fake_dataset_module = type(
-            "FakeDatasetModule", (), {"Dataset": fake_dataset_cls}
-        )
-        fake_exceptions_module = type(
-            "FakeExceptionsModule",
-            (),
-            {
-                "CommandError": fake_command_error,
-                "IncompleteResultsError": fake_incomplete_error,
-            },
-        )
-
-        def _import(name: str):  # type: ignore[no-untyped-def]
-            return {
-                "datalad.api": fake_api,
-                "datalad.distribution.dataset": fake_dataset_module,
-                "datalad.support.exceptions": fake_exceptions_module,
-            }[name]
-
-        monkeypatch.setattr(importlib, "import_module", _import)
         bundle = _datalad._import_datalad()
-        assert bundle.api is fake_api
-        assert bundle.Dataset is fake_dataset_cls
-        assert bundle.exceptions == (fake_command_error, fake_incomplete_error)
-
-    def test_real_import_raises_datalad_error_when_missing(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """When the real ``datalad`` package is absent, the seam normalizes
-        the ImportError into a :class:`DataLadError` so the orchestrator
-        never sees a bare ImportError from a third-party module.
-        """
-        real_import = builtins.__import__
-
-        def _block(name, *args, **kwargs):  # type: ignore[no-untyped-def]
-            if name == "datalad.api" or name.startswith("datalad."):
-                raise ImportError(f"No module named {name!r}")
-            return real_import(name, *args, **kwargs)
-
-        monkeypatch.setattr(builtins, "__import__", _block)
-        # Also clear any cached copy so the import is re-executed.
-        for mod in list(sys.modules):
-            if mod == "datalad" or mod.startswith("datalad."):
-                monkeypatch.delitem(sys.modules, mod, raising=False)
-
-        with pytest.raises(DataLadError, match="not installed"):
-            _datalad._import_datalad()
+        assert isinstance(bundle, _DataLadModules)
+        assert bundle.api is not None
+        assert bundle.Dataset is not None
+        assert isinstance(bundle.exceptions, tuple)
+        assert len(bundle.exceptions) == 2
+        assert all(
+            isinstance(exc, type) and issubclass(exc, BaseException)
+            for exc in bundle.exceptions
+        )

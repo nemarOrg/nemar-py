@@ -14,6 +14,7 @@ import httpx
 import pytest
 
 import nemar
+from nemar import download_one
 from nemar._endpoint import DataEndpoint
 from nemar._models import DatasetFile, VersionManifest, parse_dataset_index
 from nemar._retry import RetryPolicy
@@ -23,7 +24,6 @@ from nemar.errors import (
     ManifestError,
     TransferError,
 )
-from nemar.transfer import download_one
 
 # ---------------------------------------------------------------------------
 # NEMARClient — input validation

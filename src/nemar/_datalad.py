@@ -1,52 +1,20 @@
-"""DataLad transfer adapter — one layer of the layered transfer chain.
+"""DataLad / git-annex transfer backend — first layer of the transfer chain.
 
-The :class:`DataLadBackend` clones the dataset's DataLad repo (advertised
-by the NEMAR data endpoint as ``index.datalad_url``) and runs
-``datalad get`` against the BIDS-selected files. Composition with the
-S3 / HTTPS layers happens in :class:`~nemar._transfer.LayeredBackend`
-(which composes the :class:`~nemar._backend.TransferBackend`
-Protocol); see :func:`nemar._transfer.select_backend` for
-the chain assembly.
+:class:`DataLadBackend` clones the dataset's DataLad repo (advertised as
+``index.datalad_url``) and runs ``datalad get`` against the BIDS-selected
+files. The layered chain in :mod:`nemar._transfer` tries it first and falls
+back to HTTPS when any step raises :class:`DataLadError`.
 
-DataLad is an optional dependency. The import happens lazily through
-:func:`_import_datalad` so the module itself imports cheaply, and so
-that callers who never select the DataLad path do not pay for the
-``datalad`` package's heavy import surface (which itself pulls in
-``git-annex``, ``rdflib``, and friends). A missing dependency surfaces
-as :class:`DataLadError`, which the layered wrapper treats as a
-fallback signal.
-
-Exception scoping
------------------
-
-The DataLad adapters narrow their ``except`` clauses to the DataLad
-exception classes returned by :func:`_import_datalad`
-(``CommandError`` and ``IncompleteResultsError``). Programming bugs
-(``TypeError``, ``AttributeError``, …) bubble up to the caller
-unchanged, so a real defect in this module never silently routes
-through the HTTPS fallback — it surfaces immediately as the bug it is.
-
-Policy scope
-------------
-
-``DataLadBackend`` accepts the full :class:`TransferBackend` protocol
-arguments (``options``, ``verify``, ``retry``) but only ``options``
-informs its behavior (``max_concurrent_downloads`` → DataLad's
-``jobs``). ``verify`` and ``retry`` are honored end-to-end only by the
-HTTPS fallback; DataLad's per-file git-annex hash check and the
-orchestrator's post-transfer ``assert_all_present`` sweep are the
-real verification gates.
-
-Test hook
----------
-
-:func:`_import_datalad` is the single seam tests monkey-patch to
-substitute a fake module bundle. Production code never substitutes it.
+DataLad is a hard dependency but a heavy one (it pulls in ``git-annex``,
+``rdflib``, and friends), so the import is lazy via :func:`_import_datalad`:
+importing it at module top would tax every consumer that imports
+``nemar`` (including eegdash), even those that never select the DataLad
+path. ``import datalad.api`` alone costs ~0.5s, so deferring it until
+:meth:`DataLadBackend.transfer` actually runs keeps ``import nemar`` fast.
 """
 
 from __future__ import annotations
 
-import importlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -81,32 +49,15 @@ class _DataLadModules:
 
 
 def _import_datalad() -> _DataLadModules:
-    """Return the DataLad module bundle or raise :class:`DataLadError`.
+    """Lazily import the DataLad surfaces so ``import nemar`` stays cheap."""
+    import datalad.api as api
+    from datalad.distribution.dataset import Dataset
+    from datalad.support.exceptions import CommandError, IncompleteResultsError
 
-    Single seam for the optional-dependency import. Production code calls
-    this once per :meth:`DataLadBackend.transfer` invocation; Python's
-    import cache makes the second call free. Tests monkey-patch this
-    function to inject a fake bundle so the DataLad code path runs
-    without the real ``datalad`` package installed.
-
-    The bundle carries the DataLad exception classes the backend
-    catches so the ``except`` clauses do not need a separate, conditional
-    import that might fail when ``datalad`` is absent.
-    """
-    try:
-        api = importlib.import_module("datalad.api")
-        Dataset = importlib.import_module("datalad.distribution.dataset").Dataset
-        exceptions_module = importlib.import_module("datalad.support.exceptions")
-        command_error = exceptions_module.CommandError
-        incomplete_results_error = exceptions_module.IncompleteResultsError
-    except ImportError as exc:
-        raise DataLadError(
-            "DataLad is not installed. Install with: pip install nemar-py[datalad]"
-        ) from exc
     return _DataLadModules(
         api=api,
         Dataset=Dataset,
-        exceptions=(command_error, incomplete_results_error),
+        exceptions=(CommandError, IncompleteResultsError),
     )
 
 
@@ -117,10 +68,9 @@ class DataLadBackend:
     The clone source is the URL advertised by the NEMAR dataset index
     (``index.datalad_url``). When ``revision`` is provided (the resolved
     version tag), it is checked out before ``datalad get`` runs against
-    the BIDS-selected paths. Any failure — missing optional dep, clone
-    error, checkout error, ``get`` error — raises :class:`DataLadError`,
-    which the wrapping :class:`LayeredBackend` catches to trigger the
-    HTTPS fallback.
+    the BIDS-selected paths. Any failure — clone error, checkout error,
+    ``get`` error — raises :class:`DataLadError`, which the wrapping
+    :class:`LayeredBackend` catches to trigger the HTTPS fallback.
 
     Idempotency is explicit: when ``target_dir / ".datalad"`` already
     exists the existing clone is opened via
@@ -174,7 +124,13 @@ class DataLadBackend:
         modules = _import_datalad()
         dataset = self._open_or_install(modules, target_dir)
         if self.revision is not None:
-            self._checkout(dataset, modules)
+            try:
+                dataset.repo.checkout(self.revision)
+            except modules.exceptions as exc:
+                raise DataLadError(
+                    f"datalad failed to check out revision "
+                    f"{self.revision!r}: {exc}"
+                ) from exc
         if not files:
             return
         try:
@@ -213,20 +169,6 @@ class DataLadBackend:
         except modules.exceptions as exc:
             raise DataLadError(
                 f"datalad install failed for {self.datalad_url}: {exc}"
-            ) from exc
-
-    def _checkout(self, dataset: Any, modules: _DataLadModules) -> None:
-        """Check out ``self.revision`` on ``dataset``.
-
-        A separate method so the ``except`` clause stays narrow without
-        forcing a deeply-nested ``try`` in :meth:`transfer`.
-        """
-        try:
-            dataset.repo.checkout(self.revision)
-        except modules.exceptions as exc:
-            raise DataLadError(
-                f"datalad failed to check out revision "
-                f"{self.revision!r}: {exc}"
             ) from exc
 
 

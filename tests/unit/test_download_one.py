@@ -21,10 +21,10 @@ from pathlib import Path
 import httpx
 import pytest
 
+from nemar import download_one
 from nemar._models import DatasetFile
 from nemar._retry import RetryPolicy
 from nemar._verification import VerifyPolicy, VerifyResult
-from nemar.transfer import download_one
 
 
 def _make_file(

@@ -15,11 +15,11 @@ Scenarios
    ``httpx.Client`` + retry policy are thread-safe under realistic
    fan-out.
 2. **Idempotent repeat downloads** — same file 20 times via
-   :func:`nemar.transfer.download_one`. Pins that
+   :func:`nemar.download_one`. Pins that
    ``partition_pending`` skips redundant fetches and the verifier
    re-checks every time.
 3. **Bulk transfer of 20 files** via
-   :func:`nemar.transfer.download_files`. Exercises the shared
+   :func:`nemar.download_files`. Exercises the shared
    ``httpx.Client`` connection pool, tqdm progress aggregation, and
    the post-transfer ``assert_all_present`` sweep at scale.
 4. **Mid-stream interrupt + resume** — pre-seeds half of a multi-KB
@@ -48,9 +48,9 @@ import httpx
 import pytest
 
 import nemar
+from nemar import download_files, download_one
 from nemar._verification import VerifyPolicy, VerifyResult, check
 from nemar.s3 import archive_url, version_summary_url, version_url
-from nemar.transfer import download_files, download_one
 
 pytestmark = [pytest.mark.live, pytest.mark.slow]
 

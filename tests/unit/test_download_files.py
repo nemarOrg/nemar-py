@@ -1,4 +1,4 @@
-"""Unit tests for ``nemar.transfer.download_files``.
+"""Unit tests for ``nemar.download_files``.
 
 The bulk variant of ``download_one``. Pins the contract documented in
 :func:`nemar._transfer.download_files`: builds one shared
@@ -23,13 +23,13 @@ from pathlib import Path
 import httpx
 import pytest
 
+from nemar import download_files
 from nemar._endpoint import DataEndpoint
 from nemar._models import DatasetFile
 from nemar._request import TransferOptions
 from nemar._retry import RetryPolicy
 from nemar._verification import VerifyPolicy
 from nemar.errors import EndpointError, TransferError, VerificationError
-from nemar.transfer import download_files
 
 
 def _make_file(

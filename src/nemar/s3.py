@@ -189,7 +189,7 @@ def archive_url(dataset: str, version: str) -> str:
 
        Callers should ``HEAD`` the URL and fall back to iterating the
        manifest (via :func:`nemar.download` or
-       :func:`nemar.transfer.download_files`) when the archive is not
+       :func:`nemar.download_files`) when the archive is not
        yet available.
     """
     return (

@@ -10,6 +10,14 @@ It depends only on the seam (:mod:`nemar._backend`) and leaf modules
 (``_models``, ``_retry``, ``_verification``, ``_endpoint``, ``errors``).
 It knows nothing about backend *selection* — that lives in
 :mod:`nemar._transfer`, which imports :class:`PythonBackend` from here.
+
+The per-file retry driver raises two control-flow signals,
+:class:`~nemar._retry._RetryableError` and
+:class:`~nemar._retry._RetryFreshError`, imported from :mod:`nemar._retry`.
+These were once a private copy local to this module; they now live in
+``_retry`` and are shared with the JSON-fetch loop in
+:mod:`nemar._transport` so both retry loops own the same error
+vocabulary rather than maintaining disjoint duplicates.
 """
 
 from __future__ import annotations
@@ -26,7 +34,7 @@ from nemar import __version__
 from nemar._backend import TransferOptions
 from nemar._endpoint import DataEndpoint
 from nemar._models import DatasetFile
-from nemar._retry import RetryPolicy
+from nemar._retry import RetryPolicy, _RetryableError, _RetryFreshError
 from nemar._verification import (
     VerifyPolicy,
     VerifyResult,
@@ -34,26 +42,6 @@ from nemar._verification import (
 )
 from nemar._verification import check as _verify_check
 from nemar.errors import TransferError, VerificationError
-
-
-class _RetryableError(Exception):
-    """Raised when a per-file request can be retried.
-
-    Private to this module: the python-backend per-file loop catches it.
-    The :mod:`nemar._download` orchestrator has its own retry hierarchy
-    for JSON fetches; they are intentionally disjoint so each loop owns
-    its own error classes.
-    """
-
-
-class _RetryFreshError(_RetryableError):
-    """Raised when the retry must abandon any local partial bytes.
-
-    Subclass of :class:`_RetryableError` so the broader ``except``
-    branch still treats it as retryable; the per-file driver
-    distinguishes it to set ``force_fresh=True`` on the next attempt
-    (a one-shot recovery after HTTP 416).
-    """
 
 
 class PythonBackend:

@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
+from nemar import download_one
 from nemar._models import DatasetFile
 from nemar._verification import VerifyResult
-from nemar.transfer import download_one
 from tests.fixtures.factories import (
     make_blob,
     make_index,

@@ -79,17 +79,6 @@ class DatasetFile:
     git_sha1: str | None = None
 
 
-def parse_dataset_index(payload: Any) -> DatasetIndex:
-    """Validate a NEMAR dataset index payload."""
-    try:
-        return DatasetIndex.model_validate(payload)
-    except ValidationError as exc:
-        raise DatasetIndexError(
-            "The NEMAR data endpoint returned an unexpected dataset index "
-            f"payload: {exc.errors(include_input=False)}"
-        ) from exc
-
-
 @dataclass(frozen=True)
 class VersionManifest:
     """A parsed NEMAR version manifest.
@@ -185,6 +174,17 @@ class VersionManifest:
 
     def __len__(self) -> int:
         return len(self.files)
+
+
+def parse_dataset_index(payload: Any) -> DatasetIndex:
+    """Validate a NEMAR dataset index payload."""
+    try:
+        return DatasetIndex.model_validate(payload)
+    except ValidationError as exc:
+        raise DatasetIndexError(
+            "The NEMAR data endpoint returned an unexpected dataset index "
+            f"payload: {exc.errors(include_input=False)}"
+        ) from exc
 
 
 def _iter_manifest_entries(payload: Any) -> Iterable[Any]:
@@ -497,6 +497,18 @@ class BidsQuery:
         return "; ".join(parts) or "<empty>"
 
 
+def normalize_entity_key(key: str) -> str:
+    """Normalize a BIDS entity key (e.g. ``"subject"`` → ``"sub"``).
+
+    Module-public (no leading underscore) because both
+    :class:`BidsPath.parse` here and the ``build_bids_query`` builder in
+    :mod:`nemar._selection` need it. Keeping a single source of truth
+    for the alias table avoids drift between the parse side and the
+    query-construction side.
+    """
+    return ENTITY_ALIASES.get(key, key)
+
+
 def _split_dataset_scope(
     parts: tuple[str, ...],
 ) -> tuple[str, str | None, tuple[str, ...]]:
@@ -543,15 +555,3 @@ def _parse_datatype(parts: tuple[str, ...]) -> str | None:
         if datatype_index < len(directories):
             return directories[datatype_index]
     return None
-
-
-def normalize_entity_key(key: str) -> str:
-    """Normalize a BIDS entity key (e.g. ``"subject"`` → ``"sub"``).
-
-    Module-public (no leading underscore) because both
-    :class:`BidsPath.parse` here and the ``build_bids_query`` builder in
-    :mod:`nemar._selection` need it. Keeping a single source of truth
-    for the alias table avoids drift between the parse side and the
-    query-construction side.
-    """
-    return ENTITY_ALIASES.get(key, key)

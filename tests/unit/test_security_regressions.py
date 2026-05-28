@@ -22,6 +22,7 @@ import httpx
 import pytest
 
 import nemar._client as client_mod
+from nemar import download_one
 from nemar._client import NEMARClient
 from nemar._endpoint import DataEndpoint
 from nemar._models import DatasetFile, DatasetIndex, DatasetVersion, VersionManifest
@@ -33,7 +34,6 @@ from nemar.errors import (
     EndpointError,
     ManifestError,
 )
-from nemar.transfer import download_one
 
 
 class TestManifestPathControlCharsRejected:

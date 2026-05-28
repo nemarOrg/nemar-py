@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +57,142 @@ from nemar.errors import (
 
 _DATASET_DESCRIPTION_FILENAME = "dataset_description.json"
 _DOI_PREFIX_TEMPLATE = "10.82901/nemar.{dataset}"
+
+
+def download(
+    *,
+    dataset: str,
+    tag: str | None = None,
+    target_dir: Path | str | None = None,
+    include: Iterable[str] | None = None,
+    exclude: Iterable[str] | None = None,
+    subject: str | Iterable[str] | None = None,
+    session: str | Iterable[str] | None = None,
+    task: str | Iterable[str] | None = None,
+    run: str | Iterable[str] | None = None,
+    acquisition: str | Iterable[str] | None = None,
+    datatype: str | Iterable[str] | None = None,
+    suffix: str | Iterable[str] | None = None,
+    extension: str | Iterable[str] | None = None,
+    scope: str | Iterable[str] | None = None,
+    pipeline: str | Iterable[str] | None = None,
+    entity: Mapping[str, Any] | Iterable[str] | None = None,
+    downloader: str = "auto",
+    verify_hash: bool = True,
+    verify_size: bool = True,
+    max_retries: int = 5,
+    max_concurrent_downloads: int = 16,
+    metadata_timeout: float = 30.0,
+    stream_timeout: float = 60.0,
+    data_url: str = DEFAULT_DATA_URL,
+    no_data: bool = False,
+    trust_existing: bool = False,
+) -> None:
+    """Download a public NEMAR dataset through ``data.nemar.org``.
+
+    The explicit kwargs preserve IDE / type-checker introspection. The
+    body delegates to :meth:`DownloadRequest.from_kwargs` for the
+    normalization sweep, then to :func:`_run` for the algorithmic
+    sequence (index → version → metadata → manifest → select →
+    target-check → transfer).
+
+    ``no_data=True`` switches to a metadata-only transfer: after BIDS
+    selection, only files whose checksum is git-tracked (i.e. the
+    small sidecars, JSON descriptors, TSVs, ``README`` etc.) are
+    transferred. Files that ride the git-annex backend
+    (``sha256`` / ``md5`` checksum) are dropped. Useful for catalog
+    inspection, manifest verification, or pre-flight tooling that
+    only needs the BIDS metadata without the heavy recording binaries.
+
+    ``trust_existing=True`` opts into faster idempotent re-runs: files
+    already on disk with the right size are trusted (size-only) and not
+    re-hashed by the post-transfer verifier. Freshly transferred bytes
+    are still hash-verified in full. The default (``False``) is the
+    paranoid path — every selected file is re-hashed, so a locally
+    corrupted file with the right size but wrong content is still caught.
+    """
+    request = DownloadRequest.from_kwargs(
+        dataset=dataset,
+        tag=tag,
+        target_dir=target_dir,
+        include=include,
+        exclude=exclude,
+        subject=subject,
+        session=session,
+        task=task,
+        run=run,
+        acquisition=acquisition,
+        datatype=datatype,
+        suffix=suffix,
+        extension=extension,
+        scope=scope,
+        pipeline=pipeline,
+        entity=entity,
+        downloader=downloader,
+        verify_hash=verify_hash,
+        verify_size=verify_size,
+        max_retries=max_retries,
+        max_concurrent_downloads=max_concurrent_downloads,
+        metadata_timeout=metadata_timeout,
+        stream_timeout=stream_timeout,
+        data_url=data_url,
+        no_data=no_data,
+        trust_existing=trust_existing,
+    )
+    _run(request)
+
+
+def fetch_dataset_index(
+    *,
+    dataset: str,
+    data_url: str = DEFAULT_DATA_URL,
+    metadata_timeout: float = 30.0,
+    max_retries: int = 5,
+) -> DatasetIndex:
+    """Return the version index advertised by the NEMAR data endpoint.
+
+    Thin wrapper that constructs a one-shot :class:`NEMARClient`, fetches
+    the index, and closes. Callers that hold a NEMARClient across many
+    datasets should call :meth:`NEMARClient.fetch_index` directly to
+    amortize the TLS / connection-pool cost.
+    """
+    with NEMARClient(
+        data_url=data_url,
+        metadata_timeout=metadata_timeout,
+        max_retries=max_retries,
+    ) as client:
+        return client.fetch_index(dataset)
+
+
+def list_dataset_versions(
+    *,
+    dataset: str,
+    data_url: str = DEFAULT_DATA_URL,
+    metadata_timeout: float = 30.0,
+    max_retries: int = 5,
+) -> list[DatasetVersion]:
+    """Return versions advertised by the NEMAR data endpoint."""
+    return fetch_dataset_index(
+        dataset=dataset,
+        data_url=data_url,
+        metadata_timeout=metadata_timeout,
+        max_retries=max_retries,
+    ).versions
+
+
+@dataclass(frozen=True)
+class _MetadataResult:
+    """The output of the metadata-fetch phase of :func:`_run`.
+
+    Carries only the three values the downstream phases consume: the
+    resolved version tag, the optional DataLad sibling URL, and the
+    parsed manifest. ``index`` and ``version`` stay local to
+    :func:`_fetch_metadata`.
+    """
+
+    selected_tag: str
+    datalad_url: str | None
+    manifest: VersionManifest
 
 
 def _check_local_compatibility(
@@ -154,95 +290,6 @@ def _check_local_compatibility(
         )
 
 
-def download(
-    *,
-    dataset: str,
-    tag: str | None = None,
-    target_dir: Path | str | None = None,
-    include: Iterable[str] | None = None,
-    exclude: Iterable[str] | None = None,
-    subject: str | Iterable[str] | None = None,
-    session: str | Iterable[str] | None = None,
-    task: str | Iterable[str] | None = None,
-    run: str | Iterable[str] | None = None,
-    acquisition: str | Iterable[str] | None = None,
-    datatype: str | Iterable[str] | None = None,
-    suffix: str | Iterable[str] | None = None,
-    extension: str | Iterable[str] | None = None,
-    scope: str | Iterable[str] | None = None,
-    pipeline: str | Iterable[str] | None = None,
-    entity: Mapping[str, Any] | Iterable[str] | None = None,
-    downloader: str = "auto",
-    verify_hash: bool = True,
-    verify_size: bool = True,
-    max_retries: int = 5,
-    max_concurrent_downloads: int = 16,
-    metadata_timeout: float = 30.0,
-    stream_timeout: float = 60.0,
-    data_url: str = DEFAULT_DATA_URL,
-    no_data: bool = False,
-) -> None:
-    """Download a public NEMAR dataset through ``data.nemar.org``.
-
-    The explicit kwargs preserve IDE / type-checker introspection. The
-    body delegates to :meth:`DownloadRequest.from_kwargs` for the
-    normalization sweep, then to :func:`_run` for the algorithmic
-    sequence (index → version → metadata → manifest → select →
-    target-check → transfer).
-
-    ``no_data=True`` switches to a metadata-only transfer: after BIDS
-    selection, only files whose checksum is git-tracked (i.e. the
-    small sidecars, JSON descriptors, TSVs, ``README`` etc.) are
-    transferred. Files that ride the git-annex backend
-    (``sha256`` / ``md5`` checksum) are dropped. Useful for catalog
-    inspection, manifest verification, or pre-flight tooling that
-    only needs the BIDS metadata without the heavy recording binaries.
-    """
-    request = DownloadRequest.from_kwargs(
-        dataset=dataset,
-        tag=tag,
-        target_dir=target_dir,
-        include=include,
-        exclude=exclude,
-        subject=subject,
-        session=session,
-        task=task,
-        run=run,
-        acquisition=acquisition,
-        datatype=datatype,
-        suffix=suffix,
-        extension=extension,
-        scope=scope,
-        pipeline=pipeline,
-        entity=entity,
-        downloader=downloader,
-        verify_hash=verify_hash,
-        verify_size=verify_size,
-        max_retries=max_retries,
-        max_concurrent_downloads=max_concurrent_downloads,
-        metadata_timeout=metadata_timeout,
-        stream_timeout=stream_timeout,
-        data_url=data_url,
-        no_data=no_data,
-    )
-    _run(request)
-
-
-@dataclass(frozen=True)
-class _MetadataResult:
-    """The output of the metadata-fetch phase of :func:`_run`.
-
-    Carries only the three values the downstream phases consume: the
-    resolved version tag, the optional DataLad sibling URL, and the
-    parsed manifest. ``index`` and ``version`` stay local to
-    :func:`_fetch_metadata`.
-    """
-
-    selected_tag: str
-    datalad_url: str | None
-    manifest: VersionManifest
-
-
 def _fetch_metadata(request: DownloadRequest) -> _MetadataResult:
     """Fetch index → resolve version → fetch metadata + manifest.
 
@@ -300,13 +347,23 @@ def _transfer_and_verify(
     selected_tag: str,
     manifest_count: int,
 ) -> None:
-    """Guard the target, transfer the pending files, then verify all.
+    """Guard the target, transfer the pending files, then verify.
 
-    Local-compatibility check + case-collision guard run before any
-    bytes move. ``partition_pending`` trusts size only so an idempotent
-    re-run does not re-hash the whole dataset; the final
-    :func:`~nemar._verification.assert_all_present` is the real hash gate
-    over every selected file.
+    Local-compatibility check + case-collision guard run before any bytes
+    move. ``partition_pending`` trusts size only (cheap) to decide what
+    still needs transferring.
+
+    By default the post-transfer
+    :func:`~nemar._verification.assert_all_present` is the integrity gate
+    over the *whole* selection with the caller's policy: it hashes every
+    selected file, so a locally-present file with the right size but wrong
+    content is caught too — not just the freshly written bytes.
+
+    With ``request.trust_existing`` the already-present files (size-trusted
+    by ``partition_pending`` and not transferred this run) are not
+    re-hashed; only the freshly transferred bytes get the full hash gate.
+    This trades that corrupted-local-file guarantee for a fast idempotent
+    re-run, and is strictly opt-in.
     """
     _check_local_compatibility(
         request.target_path, dataset=request.dataset, tag=selected_tag
@@ -356,11 +413,33 @@ def _transfer_and_verify(
         )
     else:
         tqdm.write("All selected files already exist locally.")
-    assert_all_present(
-        selected_files,
-        target_dir=request.target_path,
-        policy=request.verify,
-    )
+    # The post-transfer integrity gate. By default it hashes every selected
+    # file with the caller's policy, which is what catches a locally-present
+    # file that has the right size but wrong content (the size-only
+    # pre-transfer pass cannot see that). With ``trust_existing`` the
+    # already-present files skip the re-hash (size-only) and only the
+    # freshly transferred bytes get the full hash gate.
+    if request.trust_existing:
+        pending_paths = {file.path for file in pending}
+        already_complete = [
+            file for file in selected_files if file.path not in pending_paths
+        ]
+        assert_all_present(
+            pending,
+            target_dir=request.target_path,
+            policy=request.verify,
+        )
+        assert_all_present(
+            already_complete,
+            target_dir=request.target_path,
+            policy=replace(request.verify, verify_hash=False),
+        )
+    else:
+        assert_all_present(
+            selected_files,
+            target_dir=request.target_path,
+            policy=request.verify,
+        )
     tqdm.write(f"Finished downloading {request.dataset} {selected_tag}.")
 
 
@@ -387,44 +466,6 @@ def _run(request: DownloadRequest) -> None:
     )
 
 
-def fetch_dataset_index(
-    *,
-    dataset: str,
-    data_url: str = DEFAULT_DATA_URL,
-    metadata_timeout: float = 30.0,
-    max_retries: int = 5,
-) -> DatasetIndex:
-    """Return the version index advertised by the NEMAR data endpoint.
-
-    Thin wrapper that constructs a one-shot :class:`NEMARClient`, fetches
-    the index, and closes. Callers that hold a NEMARClient across many
-    datasets should call :meth:`NEMARClient.fetch_index` directly to
-    amortize the TLS / connection-pool cost.
-    """
-    with NEMARClient(
-        data_url=data_url,
-        metadata_timeout=metadata_timeout,
-        max_retries=max_retries,
-    ) as client:
-        return client.fetch_index(dataset)
-
-
-def list_dataset_versions(
-    *,
-    dataset: str,
-    data_url: str = DEFAULT_DATA_URL,
-    metadata_timeout: float = 30.0,
-    max_retries: int = 5,
-) -> list[DatasetVersion]:
-    """Return versions advertised by the NEMAR data endpoint."""
-    return fetch_dataset_index(
-        dataset=dataset,
-        data_url=data_url,
-        metadata_timeout=metadata_timeout,
-        max_retries=max_retries,
-    ).versions
-
-
 def _target_has_files_without_description(target_dir: Path) -> bool:
     """Report whether ``target_dir`` has files but no ``dataset_description.json``.
 
@@ -441,4 +482,3 @@ def _target_has_files_without_description(target_dir: Path) -> bool:
     if next(target_dir.iterdir(), None) is None:
         return False
     return not (target_dir / _DATASET_DESCRIPTION_FILENAME).exists()
-

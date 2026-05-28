@@ -18,11 +18,9 @@ import httpx
 import pytest
 
 from nemar._endpoint import DataEndpoint
-from nemar._retry import RetryPolicy
+from nemar._retry import RetryPolicy, _RetryableError, _RetryFreshError
 from nemar._transport import (
     _response_detail,
-    _RetryableError,
-    _RetryFreshError,
     fetch_json,
 )
 

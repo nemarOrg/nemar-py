@@ -46,6 +46,28 @@ def _next_backoff(base: float) -> float:
     return base + random.uniform(0.0, base / 2.0)
 
 
+class _RetryableError(Exception):
+    """Raised when a request can be retried.
+
+    Internal control-flow signal shared by the JSON-fetch loop
+    (:mod:`nemar._transport`) and the per-file streaming loop
+    (:mod:`nemar._streaming`). Callers should not catch it; each loop
+    translates it into a final transport/transfer error once retries
+    exhaust. Lives here so both loops share the same vocabulary without
+    importing each other.
+    """
+
+
+class _RetryFreshError(_RetryableError):
+    """Raised when the retry must abandon any local partial bytes.
+
+    Subclass of :class:`_RetryableError` so existing handlers still treat
+    it as retryable; the per-file streaming driver distinguishes it to set
+    ``force_fresh=True`` on the next attempt (a one-shot recovery after
+    HTTP 416).
+    """
+
+
 @dataclass(frozen=True)
 class RetryPolicy:
     """How retries are decided and scheduled for one request loop.

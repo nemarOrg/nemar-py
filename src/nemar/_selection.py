@@ -211,33 +211,6 @@ def raise_if_unmatched_includes(
         )
 
 
-def _zero_match_message(
-    query: BidsQuery,
-    parsed: list[tuple[str, BidsPath]],
-) -> str:
-    """Build the zero-match error message, with an Available: hint when useful.
-
-    Only called from :func:`select_files` after a non-empty query
-    matched zero files, so the query is always non-empty here.
-    """
-    base = f"No files matched the BIDS query: {query.describe()}."
-
-    hint_parts: list[str] = []
-    for entity_key, label in _HINT_ENTITIES:
-        values: set[str] = set()
-        for _, bids_path in parsed:
-            value = bids_path.entities.get(entity_key)
-            if value is not None:
-                values.add(value)
-        if values:
-            sorted_values = sorted(values)[:_MAX_HINT_VALUES]
-            hint_parts.append(f"{label}=[{','.join(sorted_values)}]")
-
-    if not hint_parts:
-        return base
-    return f"{base} Available: {', '.join(hint_parts)}"
-
-
 # Glob-style matching helpers. Previously lived in ``nemar._glob`` as a
 # standalone module; inlined here because :func:`select_files` is the
 # only consumer of glob_filter, and ``is_dotfile`` is also a
@@ -285,29 +258,6 @@ def glob_filter(
         results[original] = matches
 
     return results
-
-
-def _path_matches(path: BidsPath, query: BidsQuery) -> bool:
-    """Return whether ``path`` satisfies every constraint in ``query``.
-
-    Previously ``BidsPath.matches(query)``. Hoisted as a top-level
-    predicate so the semantics live with the selection composition that
-    invokes it. Behaviour is unchanged; the tests pin every branch.
-    """
-    for key, values in query.entities.items():
-        if path.entities.get(key) not in values:
-            return False
-    if query.datatypes and path.datatype not in query.datatypes:
-        return False
-    if query.suffixes and path.suffix not in query.suffixes:
-        return False
-    if query.extensions and path.extension not in query.extensions:
-        return False
-    if query.scopes and path.scope not in query.scopes:
-        return False
-    if query.pipelines and path.pipeline not in query.pipelines:
-        return False
-    return True
 
 
 def build_bids_query(
@@ -359,6 +309,56 @@ def build_bids_query(
         scopes=_normalize_scopes(scope),
         pipelines=_normalize_values(pipeline),
     )
+
+
+def _zero_match_message(
+    query: BidsQuery,
+    parsed: list[tuple[str, BidsPath]],
+) -> str:
+    """Build the zero-match error message, with an Available: hint when useful.
+
+    Only called from :func:`select_files` after a non-empty query
+    matched zero files, so the query is always non-empty here.
+    """
+    base = f"No files matched the BIDS query: {query.describe()}."
+
+    hint_parts: list[str] = []
+    for entity_key, label in _HINT_ENTITIES:
+        values: set[str] = set()
+        for _, bids_path in parsed:
+            value = bids_path.entities.get(entity_key)
+            if value is not None:
+                values.add(value)
+        if values:
+            sorted_values = sorted(values)[:_MAX_HINT_VALUES]
+            hint_parts.append(f"{label}=[{','.join(sorted_values)}]")
+
+    if not hint_parts:
+        return base
+    return f"{base} Available: {', '.join(hint_parts)}"
+
+
+def _path_matches(path: BidsPath, query: BidsQuery) -> bool:
+    """Return whether ``path`` satisfies every constraint in ``query``.
+
+    Previously ``BidsPath.matches(query)``. Hoisted as a top-level
+    predicate so the semantics live with the selection composition that
+    invokes it. Behaviour is unchanged; the tests pin every branch.
+    """
+    for key, values in query.entities.items():
+        if path.entities.get(key) not in values:
+            return False
+    if query.datatypes and path.datatype not in query.datatypes:
+        return False
+    if query.suffixes and path.suffix not in query.suffixes:
+        return False
+    if query.extensions and path.extension not in query.extensions:
+        return False
+    if query.scopes and path.scope not in query.scopes:
+        return False
+    if query.pipelines and path.pipeline not in query.pipelines:
+        return False
+    return True
 
 
 def _normalize_entity_mapping(

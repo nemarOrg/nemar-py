@@ -7,21 +7,16 @@ configured :class:`~nemar._endpoint.DataEndpoint` after any redirects,
 and reshape exhausted retries into a :class:`TransportError` whose
 message names what the caller was trying to do.
 
-Two control-flow exception types live here so the retry loop and the
-per-file transfer's retry loop can share the same vocabulary:
-
-* :class:`_RetryableError` -- raised internally when a single attempt
-  failed in a way the policy permits retrying. Callers should not catch
-  it; the loop translates it into a final :class:`TransportError` once
-  retries exhaust.
-* :class:`_RetryFreshError` -- a subclass of :class:`_RetryableError`
-  used by the per-file transfer (``_download._transfer_one_with_python``)
-  to ask its outer loop to abandon any local partial bytes and retry
-  with an unconditional ``GET``. It lives here because both retry loops
-  share the type.
-
-Both names stay underscored: they are internal to the transport +
-transfer collaboration. Users of the public API never see them.
+The two control-flow exception types this loop raises
+(:class:`~nemar._retry._RetryableError` and
+:class:`~nemar._retry._RetryFreshError`) now live in
+:mod:`nemar._retry` and are imported below. They are shared with the
+per-file streaming loop in :mod:`nemar._streaming`, so both retry loops
+speak the same vocabulary without importing each other. ``fetch_json``
+only ever raises :class:`~nemar._retry._RetryableError`; the
+``_RetryFreshError`` subclass is the streaming loop's partial-bytes-reset
+signal. Both names stay underscored: they are internal to the transport +
+transfer collaboration and users of the public API never see them.
 """
 
 from __future__ import annotations
@@ -34,21 +29,8 @@ import httpx
 from tqdm.auto import tqdm
 
 from nemar._endpoint import DataEndpoint
-from nemar._retry import RetryPolicy
+from nemar._retry import RetryPolicy, _RetryableError
 from nemar.errors import TransportError
-
-
-class _RetryableError(Exception):
-    """Raised when a request can be retried."""
-
-
-class _RetryFreshError(_RetryableError):
-    """Raised when the retry must abandon any local partial bytes.
-
-    Subclass of :class:`_RetryableError` so existing handlers still treat
-    it as retryable; the per-file driver distinguishes it to set
-    ``force_fresh=True`` on the next attempt.
-    """
 
 
 def fetch_json(

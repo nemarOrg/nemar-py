@@ -13,7 +13,6 @@ classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Science/Research",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: BSD License",
   "Operating System :: OS Independent",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3",
@@ -65,7 +64,7 @@ Issues = "https://github.com/nemarOrg/nemar-py/issues"
 Changelog = "https://github.com/nemarOrg/nemar-py/releases"
 
 [project.scripts]
-nemar-py = "nemar._cli:app"
+nemar-py = "nemar.__main__:app"
 
 [dependency-groups]
 dev = [
@@ -93,17 +92,22 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatch-vcs", "hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
 
-[tool.hatch.version]
-source = "vcs"
+# Single source of truth for the version is ``nemar.__version__`` in
+# src/nemar/__init__.py. setuptools reads it statically (it parses the
+# literal out of the AST without importing the package), so bumping the
+# release is a one-line edit to that constant.
+[tool.setuptools.dynamic]
+version = { attr = "nemar.__version__" }
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/nemar"]
+[tool.setuptools.packages.find]
+where = ["src"]
 
-[tool.hatch.build.targets.wheel.shared-data]
-"src/nemar/py.typed" = "nemar/py.typed"
+# Ship the PEP 561 marker inside the package so type checkers see it.
+[tool.setuptools.package-data]
+nemar = ["py.typed"]
 
 [tool.pytest.ini_options]
 addopts = ["--tb=short", "-ra", "-vv", "--strict-markers"]
@@ -118,7 +122,6 @@ testpaths = ["tests"]
 [tool.coverage.run]
 source = ["nemar"]
 branch = true
-omit = ["src/nemar/__main__.py"]
 
 [tool.coverage.report]
 fail_under = 94
@@ -127,6 +130,7 @@ exclude_lines = [
   "pragma: no cover",
   "if TYPE_CHECKING:",
   "raise NotImplementedError",
+  "if __name__ == .__main__.:",
 ]
 
 [tool.pyright]

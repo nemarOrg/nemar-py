@@ -78,6 +78,33 @@ def test_partial_file_with_wrong_hash_raises_post_transfer(nemar_endpoint, targe
         )
 
 
+def test_trust_existing_skips_rehash_of_present_file(nemar_endpoint, target_dir):
+    """``trust_existing=True`` trusts a right-size local file, no re-hash.
+
+    Same corrupted-but-right-size local file as the test above, but the
+    opt-in fast path size-trusts it: it is not in the pending list, not
+    re-fetched, and not re-hashed, so the download completes without
+    raising. This documents the deliberate integrity-for-speed trade —
+    the inverse of the default contract.
+    """
+    blob = make_blob(seed=2, size_bytes=256)
+    _publish(nemar_endpoint, blob)
+    bad = target_dir / "f.bin"
+    bad.write_bytes(b"\x00" * 256)  # right size, wrong content
+
+    nemar.download(
+        dataset="nm000132",
+        target_dir=target_dir,
+        data_url=nemar_endpoint.base_url,
+        downloader="python",
+        max_concurrent_downloads=1,
+        trust_existing=True,
+    )
+
+    # The size-trusted local file is left untouched (never re-fetched).
+    assert bad.read_bytes() == b"\x00" * 256
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX-only chmod semantics")
 def test_readonly_target_dir_raises(nemar_endpoint, target_dir):
     blob = make_blob(seed=3, size_bytes=32)
