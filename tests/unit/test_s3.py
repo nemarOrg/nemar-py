@@ -14,11 +14,16 @@ layout, these tests fail loudly and tell us exactly where.
 
 from __future__ import annotations
 
+import pytest
+
 from nemar.s3 import (
     NEMAR_S3_BUCKET,
     NEMAR_S3_HOST,
     NEMAR_S3_REGION,
+    archive_url,
     s3_object_url,
+    version_summary_url,
+    version_url,
 )
 
 
@@ -59,6 +64,60 @@ def test_s3_object_url_for_md5e_key() -> None:
         "https://nemar.s3.us-east-2.amazonaws.com/"
         "nm000104/objects/" + key
     )
+
+
+def test_version_url_with_v_prefix() -> None:
+    """``version/<v>.json`` is the canonical compact manifest.
+
+    Confirmed against the live bucket: every dataset has this object at
+    the documented path, and an unsigned ``HEAD`` returns 200. The S3
+    manifest is in a different shape from ``data.nemar.org``'s
+    transformed version (dict keyed by path vs. flat array with
+    pre-signed URLs), but it is the same content.
+    """
+    assert version_url("nm000133", "v1.0.2") == (
+        "https://nemar.s3.us-east-2.amazonaws.com/nm000133/version/v1.0.2.json"
+    )
+
+
+def test_version_url_normalizes_bare_version() -> None:
+    """``"1.0.0"`` and ``"v1.0.0"`` both round-trip to the same URL.
+
+    Matches the normalization rule used by
+    ``DownloadRequest.from_kwargs(tag=...)``: leading digit gets a
+    ``v`` prefix automatically. Saves the caller a string-format step
+    when they already have a bare semver from elsewhere.
+    """
+    assert version_url("nm000133", "1.0.2") == version_url("nm000133", "v1.0.2")
+
+
+def test_version_summary_url() -> None:
+    """``version/<v>-summary.json`` is the lightweight catalog summary
+    (modalities, subjects, totals, paths array). Same public-read
+    contract as the full manifest.
+    """
+    assert version_summary_url("nm000132", "v1.1.1") == (
+        "https://nemar.s3.us-east-2.amazonaws.com/"
+        "nm000132/version/v1.1.1-summary.json"
+    )
+
+
+def test_archive_url() -> None:
+    """``archives/<v>.zip`` is the whole-dataset bundle (tens of MB to
+    hundreds of GB depending on the dataset). Useful for callers that
+    want one transfer instead of iterating the manifest.
+    """
+    assert archive_url("nm000104", "v2.0.0") == (
+        "https://nemar.s3.us-east-2.amazonaws.com/nm000104/archives/v2.0.0.zip"
+    )
+
+
+def test_empty_version_rejected() -> None:
+    """Empty / whitespace-only version is a caller error, not a 404 hunt."""
+    with pytest.raises(ValueError, match="version must not be empty"):
+        version_url("nm000132", "")
+    with pytest.raises(ValueError, match="version must not be empty"):
+        archive_url("nm000132", "   ")
 
 
 def test_s3_object_url_handles_on_prefix() -> None:

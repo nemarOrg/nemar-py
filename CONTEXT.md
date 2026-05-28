@@ -5,22 +5,39 @@
 - **NEMAR S3 layout**: NEMAR's file delivery rides on a single public S3
   bucket. The layout was verified end-to-end against the official
   DataLad clones of four representative datasets (nm000132, nm000104,
-  on005505, nm000133) and surfaced as code in `src/nemar/_s3.py` /
-  `src/nemar/s3.py`:
-  - Bucket: `nemar` (region `us-east-2`)
+  on005505, nm000133), then expanded once a NEMAR-credentialed
+  principal probed the bucket directly. Surfaced as code in
+  `src/nemar/_s3.py` / `src/nemar/s3.py`:
+  - Bucket: `nemar` (region `us-east-2`, ARN `arn:aws:s3:::nemar`)
   - Public host: `https://nemar.s3.us-east-2.amazonaws.com`
-  - Per-dataset prefix: `<dataset>/objects/`
-  - Object key: git-annex content key
+  - Per-dataset prefix: `<dataset>/` with four child prefixes:
+    - `objects/<annex-key>` — git-annex content blobs
+    - `version/<version>.json` — canonical compact manifest
+      (dict keyed by file path; contains `key`, `size`, `checksum`)
+    - `version/<version>-summary.json` — lightweight catalog summary
+      (modalities, subjects, totals, paths array)
+    - `archives/<version>.zip` — whole-dataset bundle
+      (tens of MB to hundreds of GB)
+    - `qa/` (some datasets only) — QA artifacts (not exposed as a helper)
+  - Object key for the `objects/` prefix: git-annex content key
     (e.g. `SHA256E-s<size>--<hex>.<ext>` or `MD5E-s<size>--<hex>.<ext>`)
-  The bucket is publicly readable: an unsigned `GET` against the
-  canonical URL returns 200 OK. The pre-signed URLs the
-  `data.nemar.org` manifest serves (with `X-Amz-Expires=3600` and
-  `response-content-disposition`) are a convenience layer on top of the
-  same canonical objects, not a separate access path. The constants
-  `NEMAR_S3_HOST` / `NEMAR_S3_BUCKET` / `NEMAR_S3_REGION` and the
-  helper `s3_object_url(dataset, annex_key)` are the public seam for
-  callers (e.g. eegdash) that hold an annex key from a DataLad clone
-  and want to skip the manifest fetch.
+  - Version normalization: helpers accept both `"v1.0.2"` and
+    `"1.0.2"`; the leading `v` is added when missing.
+
+  **Public-read, private-list contract.** The bucket's *content* is
+  public: unsigned `GET` / `HEAD` against every URL the four helpers
+  produce returns 200 OK. The bucket's *index* is private: any
+  `ListObjects` call requires NEMAR-internal AWS credentials.
+  Discovery therefore still goes through `data.nemar.org/`.
+
+  The pre-signed URLs the `data.nemar.org` manifest serves (with
+  `X-Amz-Expires=3600` and `response-content-disposition`) are a
+  convenience layer on top of the same canonical objects, not a
+  separate access path. Once you know `(dataset, version)`, the
+  helpers `s3_object_url`, `version_url`, `version_summary_url`, and
+  `archive_url` let credential-less callers skip the
+  `data.nemar.org` round-trip and the 1-hour signed-URL window
+  entirely.
 - **NEMAR data endpoint**: The public HTTPS origin at `https://data.nemar.org/`.
   This is the canonical entry point for downloads in this client. Modeled
   internally as the `DataEndpoint` value type (`src/nemar/_endpoint.py`),

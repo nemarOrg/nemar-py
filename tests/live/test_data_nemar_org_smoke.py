@@ -12,7 +12,12 @@ import httpx
 import pytest
 
 import nemar
-from nemar.s3 import s3_object_url
+from nemar.s3 import (
+    archive_url,
+    s3_object_url,
+    version_summary_url,
+    version_url,
+)
 
 pytestmark = pytest.mark.live
 
@@ -96,6 +101,63 @@ def test_s3_canonical_url_serves_an_object() -> None:
     response = httpx.head(canonical, follow_redirects=False, timeout=10.0)
     assert response.status_code == 200, (
         f"expected 200 for unsigned {canonical}, got {response.status_code}"
+    )
+
+
+@pytest.mark.skipif(
+    os.environ.get("NEMAR_LIVE_TEST") != "1",
+    reason=SKIP_REASON,
+)
+def test_s3_version_url_unsigned_head_returns_200() -> None:
+    """``version_url(...)`` resolves the canonical compact manifest.
+
+    Regression guard against NEMAR ever locking down the
+    ``version/<v>.json`` path. ``HEAD`` only — the body would re-fetch
+    something we already exercise via the manifest path.
+    """
+    latest = nemar.fetch_dataset_index(dataset=LIVE_DATASET).latest
+    url = version_url(LIVE_DATASET, latest)
+    response = httpx.head(url, follow_redirects=False, timeout=10.0)
+    assert response.status_code == 200, (
+        f"unsigned HEAD {url} → {response.status_code}"
+    )
+    assert response.headers.get("content-type", "").startswith("application/json")
+
+
+@pytest.mark.skipif(
+    os.environ.get("NEMAR_LIVE_TEST") != "1",
+    reason=SKIP_REASON,
+)
+def test_s3_version_summary_url_unsigned_head_returns_200() -> None:
+    """``version_summary_url(...)`` resolves the lightweight catalog summary."""
+    latest = nemar.fetch_dataset_index(dataset=LIVE_DATASET).latest
+    url = version_summary_url(LIVE_DATASET, latest)
+    response = httpx.head(url, follow_redirects=False, timeout=10.0)
+    assert response.status_code == 200, (
+        f"unsigned HEAD {url} → {response.status_code}"
+    )
+
+
+@pytest.mark.skipif(
+    os.environ.get("NEMAR_LIVE_TEST") != "1",
+    reason=SKIP_REASON,
+)
+def test_s3_archive_url_unsigned_head_returns_200() -> None:
+    """``archive_url(...)`` resolves the whole-dataset ZIP.
+
+    Pins that the archives prefix is publicly readable and that the
+    sizes are at least non-trivial (regression guard against a stub
+    zip). ``HEAD`` only — the body would be multi-GB.
+    """
+    latest = nemar.fetch_dataset_index(dataset=LIVE_DATASET).latest
+    url = archive_url(LIVE_DATASET, latest)
+    response = httpx.head(url, follow_redirects=False, timeout=10.0)
+    assert response.status_code == 200, (
+        f"unsigned HEAD {url} → {response.status_code}"
+    )
+    content_length = int(response.headers.get("content-length", "0"))
+    assert content_length > 1_000_000, (
+        f"archive looks like a stub: only {content_length} bytes"
     )
 
 

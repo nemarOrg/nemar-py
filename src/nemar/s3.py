@@ -10,4 +10,7 @@ from __future__ import annotations
 from nemar._s3 import NEMAR_S3_BUCKET as NEMAR_S3_BUCKET
 from nemar._s3 import NEMAR_S3_HOST as NEMAR_S3_HOST
 from nemar._s3 import NEMAR_S3_REGION as NEMAR_S3_REGION
+from nemar._s3 import archive_url as archive_url
 from nemar._s3 import s3_object_url as s3_object_url
+from nemar._s3 import version_summary_url as version_summary_url
+from nemar._s3 import version_url as version_url
