@@ -36,12 +36,27 @@ import threading
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urlparse
 
 import pytest
-import toxiproxy
 from pytest_httpserver import HTTPServer
-from toxiproxy.api import APIConsumer
+
+# ``toxiproxy-python`` is in the dev dependency group but is not part
+# of the default CI install (which only pulls pytest + a handful of
+# helpers). Importing it at module top would crash conftest.py on
+# every CI run. Wrap it in a try/except so the rest of the test suite
+# loads cleanly and the chaos fixtures skip when the package is
+# missing.
+try:
+    import toxiproxy
+    from toxiproxy.api import APIConsumer
+
+    _toxiproxy_import_error: ImportError | None = None
+except ImportError as exc:
+    toxiproxy = None  # type: ignore[assignment]
+    APIConsumer = None  # type: ignore[assignment]
+    _toxiproxy_import_error = exc
 
 CHAOS_GATE = "NEMAR_CHAOS"
 SKIP_REASON = (
@@ -58,7 +73,10 @@ class ChaosHandle:
     cleared on teardown so scenarios cannot leak.
     """
 
-    proxy: toxiproxy.Proxy
+    # Typed as ``Any`` because ``toxiproxy`` may be ``None`` in the
+    # default-install environment; the chaos fixtures already skip in
+    # that case so ``proxy`` is never accessed when the import failed.
+    proxy: Any
     listen_port: int
     upstream_host: str
 
@@ -119,10 +137,15 @@ def _binary_available() -> bool:
 
 
 @pytest.fixture(scope="session")
-def _toxiproxy_server() -> Iterator[toxiproxy.Toxiproxy]:
+def _toxiproxy_server() -> Iterator[toxiproxy.Toxiproxy]:  # type: ignore[name-defined]
     """Boot ``toxiproxy-server`` once per session."""
     if os.environ.get(CHAOS_GATE) != "1" or not _binary_available():
         pytest.skip(SKIP_REASON)
+    if _toxiproxy_import_error is not None:
+        pytest.skip(
+            f"toxiproxy-python is not installed ({_toxiproxy_import_error}); "
+            "install the dev dependency group to enable chaos tests."
+        )
     api_port = _free_port()
     proc = subprocess.Popen(  # noqa: S603 — fixed-arg subprocess
         ["toxiproxy-server", "--host=127.0.0.1", f"--port={api_port}"],
@@ -150,7 +173,7 @@ def _toxiproxy_server() -> Iterator[toxiproxy.Toxiproxy]:
 
 @pytest.fixture
 def chaos_proxy(
-    _toxiproxy_server: toxiproxy.Toxiproxy,
+    _toxiproxy_server: toxiproxy.Toxiproxy,  # type: ignore[name-defined]
     _nemar_https_server: HTTPServer,
 ) -> Iterator[ChaosHandle]:
     """Per-test toxiproxy proxy in front of the local HTTPS fixture.
