@@ -31,11 +31,6 @@ from tqdm.auto import tqdm
 
 from nemar import __version__
 from nemar._client import NEMARClient
-from nemar._errors import (
-    LocalTargetError,
-    LocalVersionMismatchError,
-    SelectionError,
-)
 from nemar._models import (
     DatasetIndex,
     DatasetVersion,
@@ -51,6 +46,11 @@ from nemar._verification import (
     assert_all_present,
     detect_case_collisions,
     partition_pending,
+)
+from nemar.errors import (
+    LocalTargetError,
+    LocalVersionMismatchError,
+    SelectionError,
 )
 
 _DATASET_DESCRIPTION_FILENAME = "dataset_description.json"

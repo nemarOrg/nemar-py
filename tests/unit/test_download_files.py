@@ -24,11 +24,11 @@ import httpx
 import pytest
 
 from nemar._endpoint import DataEndpoint
-from nemar._errors import EndpointError, TransferError, VerificationError
 from nemar._models import DatasetFile
 from nemar._request import TransferOptions
 from nemar._retry import RetryPolicy
 from nemar._verification import VerifyPolicy
+from nemar.errors import EndpointError, TransferError, VerificationError
 from nemar.transfer import download_files
 
 

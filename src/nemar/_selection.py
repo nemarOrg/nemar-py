@@ -21,8 +21,8 @@ from difflib import get_close_matches
 from wcmatch import glob
 
 from nemar import _bids
-from nemar._errors import SelectionError
 from nemar._models import DatasetFile
+from nemar.errors import SelectionError
 
 ESSENTIAL_BIDS_FILES = frozenset(
     {

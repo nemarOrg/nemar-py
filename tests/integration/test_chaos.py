@@ -25,10 +25,10 @@ from pathlib import Path
 import httpx
 import pytest
 
-from nemar._errors import TransferError
 from nemar._models import DatasetFile
 from nemar._retry import RetryPolicy
 from nemar._verification import VerifyPolicy, VerifyResult, check
+from nemar.errors import TransferError
 from nemar.transfer import download_one
 from tests.fixtures.factories import (
     make_index,

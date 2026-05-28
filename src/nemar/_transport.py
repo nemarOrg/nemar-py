@@ -34,8 +34,8 @@ import httpx
 from tqdm.auto import tqdm
 
 from nemar._endpoint import DataEndpoint
-from nemar._errors import TransportError
 from nemar._retry import RetryPolicy
+from nemar.errors import TransportError
 
 
 class _RetryableError(Exception):

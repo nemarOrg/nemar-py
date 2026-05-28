@@ -45,7 +45,6 @@ from tqdm.auto import tqdm
 from nemar import __version__
 from nemar._datalad import DataLadBackend
 from nemar._endpoint import DataEndpoint
-from nemar._errors import DataLadError, S3Error, TransferError, VerificationError
 from nemar._models import DatasetFile
 from nemar._retry import RetryPolicy
 from nemar._s3 import S3Backend
@@ -57,6 +56,7 @@ from nemar._verification import (
     partition_pending,
 )
 from nemar._verification import check as _verify_check
+from nemar.errors import DataLadError, S3Error, TransferError, VerificationError
 
 
 class _RetryableError(Exception):
@@ -438,7 +438,7 @@ def download_one(
         Optional :class:`~nemar._endpoint.DataEndpoint` to enforce
         origin scoping at the call site. When supplied, ``file.url``
         must share the endpoint's scheme + netloc; otherwise
-        :class:`~nemar._errors.EndpointError` is raised before any
+        :class:`~nemar.errors.EndpointError` is raised before any
         bytes are fetched. Files produced by
         :meth:`~nemar.models.VersionManifest.parse` are already origin-scoped;
         passing ``endpoint`` here is the right move for callers that
@@ -542,7 +542,7 @@ def download_files(
         Optional :class:`~nemar.models.DataEndpoint` used to enforce
         origin scoping. When supplied, every file's ``url`` must share
         the endpoint's scheme + netloc; otherwise
-        :class:`~nemar._errors.EndpointError` is raised before any
+        :class:`~nemar.errors.EndpointError` is raised before any
         bytes move. When ``None`` (default) no origin check runs —
         matches :func:`download_one`'s default and trusts the caller's
         own scoping (typically inherited from

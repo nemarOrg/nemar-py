@@ -53,10 +53,10 @@ from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
-from nemar._errors import DataLadError
 from nemar._models import DatasetFile
 from nemar._retry import RetryPolicy
 from nemar._verification import VerifyPolicy
+from nemar.errors import DataLadError
 
 if TYPE_CHECKING:
     # ``TransferOptions`` is used only as a type annotation. Guarding it

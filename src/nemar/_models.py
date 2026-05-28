@@ -11,7 +11,7 @@ from urllib.parse import urljoin
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from nemar._endpoint import DataEndpoint
-from nemar._errors import DatasetIndexError, ManifestError
+from nemar.errors import DatasetIndexError, ManifestError
 
 
 class DatasetVersion(BaseModel):

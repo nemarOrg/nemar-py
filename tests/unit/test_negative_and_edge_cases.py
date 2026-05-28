@@ -15,14 +15,14 @@ import pytest
 
 import nemar
 from nemar._endpoint import DataEndpoint
-from nemar._errors import (
+from nemar._models import DatasetFile, VersionManifest, parse_dataset_index
+from nemar._retry import RetryPolicy
+from nemar._verification import VerifyPolicy, VerifyResult
+from nemar.errors import (
     DatasetIndexError,
     ManifestError,
     TransferError,
 )
-from nemar._models import DatasetFile, VersionManifest, parse_dataset_index
-from nemar._retry import RetryPolicy
-from nemar._verification import VerifyPolicy, VerifyResult
 from nemar.transfer import download_one
 
 # ---------------------------------------------------------------------------
