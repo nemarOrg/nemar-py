@@ -2,9 +2,8 @@
 
 import pytest
 
-from nemar import _bids
-from nemar._models import DatasetFile
-from nemar._selection import SelectionPlan
+from nemar._models import BidsQuery, DatasetFile
+from nemar._selection import SelectionPlan, build_bids_query
 from tests.fixtures.factories import make_dataset_file
 
 
@@ -23,7 +22,7 @@ def test_build_round_trips_trivial_selection() -> None:
 
     plan = SelectionPlan.build(
         files,
-        query=_bids.BidsQuery(),
+        query=BidsQuery(),
         include=[],
         exclude=[],
     )
@@ -48,7 +47,7 @@ def test_essential_kept_contains_present_essentials() -> None:
 
     plan = SelectionPlan.build(
         files,
-        query=_bids.BidsQuery(),
+        query=BidsQuery(),
         include=["sub-001/eeg"],
         exclude=["*.fdt"],
     )
@@ -68,7 +67,7 @@ def test_essential_kept_never_contains_absent_essentials() -> None:
 
     plan = SelectionPlan.build(
         files,
-        query=_bids.BidsQuery(),
+        query=BidsQuery(),
         include=[],
         exclude=[],
     )
@@ -104,7 +103,7 @@ def test_root_sidecars_auto_included_when_bids_query_active() -> None:
 
     plan = SelectionPlan.build(
         files,
-        query=_bids.BidsQuery.from_filters(subject="001"),
+        query=build_bids_query(subject="001"),
         include=[],
         exclude=[],
     )
@@ -143,7 +142,7 @@ def test_root_sidecars_not_auto_included_without_bids_query() -> None:
 
     plan = SelectionPlan.build(
         files,
-        query=_bids.BidsQuery(),  # empty
+        query=BidsQuery(),  # empty
         include=["sub-001/**"],
         exclude=[],
     )
@@ -177,7 +176,7 @@ def test_root_sidecars_sweep_skips_subdirectory_jsons() -> None:
 
     plan = SelectionPlan.build(
         files,
-        query=_bids.BidsQuery.from_filters(subject="001"),
+        query=build_bids_query(subject="001"),
         include=[],
         exclude=[],
     )
@@ -213,7 +212,7 @@ def test_subject_query_does_not_match_derivatives_by_default() -> None:
 
     plan = SelectionPlan.build(
         files,
-        query=_bids.BidsQuery.from_filters(subject="02"),
+        query=build_bids_query(subject="02"),
         include=[],
         exclude=[],
     )
@@ -243,7 +242,7 @@ def test_explicit_derivatives_scope_still_works() -> None:
 
     plan = SelectionPlan.build(
         files,
-        query=_bids.BidsQuery.from_filters(
+        query=build_bids_query(
             subject="02",
             scope="derivatives",
             pipeline="epoched",
@@ -274,7 +273,7 @@ def test_excluded_by_pattern_records_paths_but_keeps_essentials() -> None:
 
     plan = SelectionPlan.build(
         files,
-        query=_bids.BidsQuery(),
+        query=BidsQuery(),
         include=[],
         exclude=["*.tsv", "*.json"],
     )
@@ -299,7 +298,7 @@ def test_unmatched_includes_populated_for_literal_miss() -> None:
 
     plan = SelectionPlan.build(
         files,
-        query=_bids.BidsQuery(),
+        query=BidsQuery(),
         include=["participant.tsv"],
         exclude=[],
     )
@@ -318,7 +317,7 @@ def test_raise_if_unmatched_includes_suggests_close_match() -> None:
 
     plan = SelectionPlan.build(
         files,
-        query=_bids.BidsQuery(),
+        query=BidsQuery(),
         include=["participant.tsv"],
         exclude=[],
     )
@@ -333,7 +332,7 @@ def test_raise_if_unmatched_includes_no_suggestion_for_unique_pattern() -> None:
 
     plan = SelectionPlan.build(
         files,
-        query=_bids.BidsQuery(),
+        query=BidsQuery(),
         include=["totally-unrelated-name"],
         exclude=[],
     )
@@ -352,7 +351,7 @@ def test_zero_match_query_without_hintable_entities_omits_available() -> None:
     with pytest.raises(RuntimeError) as info:
         SelectionPlan.build(
             files,
-            query=_bids.BidsQuery.from_filters(subject="001"),
+            query=build_bids_query(subject="001"),
             include=[],
             exclude=[],
         )
@@ -375,7 +374,7 @@ def test_zero_match_query_lists_available_entities() -> None:
     with pytest.raises(RuntimeError) as info:
         SelectionPlan.build(
             files,
-            query=_bids.BidsQuery.from_filters(subject="999"),
+            query=build_bids_query(subject="999"),
             include=[],
             exclude=[],
         )

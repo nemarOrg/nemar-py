@@ -15,8 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from nemar._bids import BidsQuery
 from nemar._endpoint import DataEndpoint
+from nemar._models import BidsQuery
 from nemar._request import DownloadRequest, TransferOptions
 from nemar._retry import RetryPolicy
 from nemar._verification import VerifyPolicy

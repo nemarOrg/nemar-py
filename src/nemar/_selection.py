@@ -3,13 +3,22 @@
 This module owns the composition of three operations that previously lived in
 ``_download._select_bids_files``:
 
-1. Apply a :class:`~nemar._bids.BidsQuery` to manifest paths.
+1. Apply a :class:`~nemar._models.BidsQuery` to manifest paths.
 2. Narrow the result with include glob patterns.
 3. Subtract exclude glob patterns and force-keep essential BIDS root files.
 
 Instead of returning only the final list of files, :class:`SelectionPlan`
 preserves the *plan* of how the selection happened, which makes debugging,
 diagnostics, and future callers far easier.
+
+The BIDS *value types* (:class:`~nemar._models.BidsPath`,
+:class:`~nemar._models.BidsQuery`) live in :mod:`nemar._models` with the
+other dumb value types. The *operations* over them — building a query
+from raw kwargs (:func:`build_bids_query`) and matching a parsed path
+against a query (:func:`_path_matches`) — live here, next to their one
+consumer. Splitting it this way removes the three-file bounce reported
+in the architecture audit (``_bids`` for shape ↔ ``_bids`` for parse ↔
+``_selection`` for use).
 """
 
 from __future__ import annotations
@@ -17,12 +26,18 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from difflib import get_close_matches
+from typing import Any
 
 from wcmatch import glob
 
-from nemar import _bids
 from nemar._errors import SelectionError
-from nemar._models import DatasetFile
+from nemar._models import (
+    DATASET_SCOPES,
+    BidsPath,
+    BidsQuery,
+    DatasetFile,
+    normalize_entity_key,
+)
 
 ESSENTIAL_BIDS_FILES = frozenset(
     {
@@ -70,7 +85,7 @@ class SelectionPlan:
         cls,
         files: Sequence[DatasetFile],
         *,
-        query: _bids.BidsQuery,
+        query: BidsQuery,
         include: Sequence[str],
         exclude: Sequence[str],
     ) -> SelectionPlan:
@@ -90,12 +105,12 @@ class SelectionPlan:
             )
         else:
             parsed = [
-                (file.path, _bids.BidsPath.parse(file.path))
+                (file.path, BidsPath.parse(file.path))
                 for file in files
                 if not is_dotfile(file.path)
             ]
             matched = tuple(
-                path for path, bids_path in parsed if bids_path.matches(query)
+                path for path, bids_path in parsed if _path_matches(bids_path, query)
             )
             if not matched:
                 raise SelectionError(_zero_match_message(query, parsed))
@@ -193,8 +208,8 @@ class SelectionPlan:
 
 
 def _zero_match_message(
-    query: _bids.BidsQuery,
-    parsed: list[tuple[str, _bids.BidsPath]],
+    query: BidsQuery,
+    parsed: list[tuple[str, BidsPath]],
 ) -> str:
     """Build the zero-match error message, with an Available: hint when useful.
 
@@ -266,3 +281,162 @@ def glob_filter(
         results[original] = matches
 
     return results
+
+
+# BIDS query/path operations. These were classmethods/instance methods
+# on ``BidsQuery`` and ``BidsPath`` in the now-deleted ``nemar._bids``
+# module; they live here, in module-private free-function form, because
+# they are *operations on* the value types — and their only consumer
+# (``SelectionPlan.build``, plus the one ``DownloadRequest.from_kwargs``
+# caller of ``build_bids_query``) lives here. Keeping the value types
+# dumb-shape in ``_models`` and the semantics next to the consumer
+# eliminates the three-file bounce the audit reported.
+
+
+def _path_matches(path: BidsPath, query: BidsQuery) -> bool:
+    """Return whether ``path`` satisfies every constraint in ``query``.
+
+    Previously ``BidsPath.matches(query)``. Inlined as a top-level
+    predicate so the semantics live with the selection composition that
+    invokes it (one call site, in ``SelectionPlan.build``). Behavior is
+    unchanged; the tests pin every branch.
+    """
+    for key, values in query.entities.items():
+        if path.entities.get(key) not in values:
+            return False
+    if query.datatypes and path.datatype not in query.datatypes:
+        return False
+    if query.suffixes and path.suffix not in query.suffixes:
+        return False
+    if query.extensions and path.extension not in query.extensions:
+        return False
+    if query.scopes and path.scope not in query.scopes:
+        return False
+    if query.pipelines and path.pipeline not in query.pipelines:
+        return False
+    return True
+
+
+def build_bids_query(
+    *,
+    subject: str | Iterable[str] | None = None,
+    session: str | Iterable[str] | None = None,
+    task: str | Iterable[str] | None = None,
+    run: str | Iterable[str] | None = None,
+    acquisition: str | Iterable[str] | None = None,
+    datatype: str | Iterable[str] | None = None,
+    suffix: str | Iterable[str] | None = None,
+    extension: str | Iterable[str] | None = None,
+    scope: str | Iterable[str] | None = None,
+    pipeline: str | Iterable[str] | None = None,
+    entity: Mapping[str, Any] | Iterable[str] | None = None,
+) -> BidsQuery:
+    """Build a :class:`BidsQuery` from common BIDS filters and generic entities.
+
+    Previously ``BidsQuery.from_filters``. Lives next to its consumer
+    (``DownloadRequest.from_kwargs``) so the raw-kwargs → normalized
+    tuples transformation can be read in one place alongside the
+    selection composition that actually applies the query.
+    """
+    entities = _normalize_entity_mapping(entity)
+    _add_entity_filter(entities, "sub", subject)
+    _add_entity_filter(entities, "ses", session)
+    _add_entity_filter(entities, "task", task)
+    _add_entity_filter(entities, "run", run)
+    _add_entity_filter(entities, "acq", acquisition)
+
+    # Default to ``raw`` scope when none is supplied. Without this,
+    # a subject/session query would also match files under
+    # ``derivatives/<pipeline>/sub-X/...`` because the BIDS subject
+    # entity appears in both the raw tree and any subject-scoped
+    # derivative — surprising over-fetch (we've seen 260 MB of
+    # epoched derivatives sneak in on a sub-02 query against
+    # nm000133). The explicit choices are unchanged: callers who
+    # want a derivative pipeline, stimuli, sourcedata, or code pass
+    # ``scope=`` directly (e.g. ``scope="derivatives", pipeline=...``).
+    if scope is None:
+        scope = "raw"
+    return BidsQuery(
+        entities=entities,
+        datatypes=_normalize_values(datatype),
+        suffixes=_normalize_values(suffix),
+        extensions=tuple(
+            _normalize_extension(v) for v in _normalize_values(extension)
+        ),
+        scopes=_normalize_scopes(scope),
+        pipelines=_normalize_values(pipeline),
+    )
+
+
+def _normalize_entity_mapping(
+    entity: Mapping[str, Any] | Iterable[str] | None,
+) -> dict[str, tuple[str, ...]]:
+    if entity is None:
+        return {}
+    if isinstance(entity, Mapping):
+        return {
+            normalize_entity_key(key): _normalize_entity_values(key, value)
+            for key, value in entity.items()
+        }
+
+    out: dict[str, tuple[str, ...]] = {}
+    for item in entity:
+        if "=" not in item:
+            raise ValueError(
+                f'BIDS entity filters must use "key=value" syntax, got {item!r}.'
+            )
+        key, value = item.split("=", 1)
+        if not key or not value:
+            raise ValueError(
+                f'BIDS entity filters must use "key=value" syntax, got {item!r}.'
+            )
+        out[normalize_entity_key(key)] = _normalize_entity_values(key, value)
+    return out
+
+
+def _add_entity_filter(
+    entities: dict[str, tuple[str, ...]],
+    key: str,
+    value: str | Iterable[str] | None,
+) -> None:
+    values = _normalize_entity_values(key, value)
+    if values:
+        entities[key] = values
+
+
+def _normalize_entity_values(key: str, values: Any) -> tuple[str, ...]:
+    normalized_key = normalize_entity_key(key)
+    out = []
+    for value in _normalize_values(values):
+        prefix = f"{normalized_key}-"
+        out.append(value.removeprefix(prefix))
+    return tuple(out)
+
+
+def _normalize_values(values: Any) -> tuple[str, ...]:
+    if values is None:
+        return ()
+    if isinstance(values, str):
+        return (values,)
+    if not isinstance(values, Iterable):
+        return (str(values),)
+    return tuple(str(value) for value in values)
+
+
+def _normalize_extension(value: str) -> str:
+    value = value.lower()
+    if not value.startswith("."):
+        value = "." + value
+    return value
+
+
+def _normalize_scopes(values: Any) -> tuple[str, ...]:
+    scopes = tuple(value.lower() for value in _normalize_values(values))
+    invalid = sorted(set(scopes) - DATASET_SCOPES)
+    if invalid:
+        expected = ", ".join(sorted(DATASET_SCOPES))
+        raise ValueError(
+            "Unknown BIDS dataset scope(s): "
+            f"{', '.join(invalid)}. Expected one of: {expected}."
+        )
+    return scopes

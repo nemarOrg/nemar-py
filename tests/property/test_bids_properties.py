@@ -7,7 +7,8 @@ import string
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from nemar._bids import DATASET_SCOPES, BidsPath, BidsQuery
+from nemar._models import DATASET_SCOPES, BidsPath
+from nemar._selection import build_bids_query
 
 label_chars = string.ascii_lowercase + string.digits
 labels = st.text(alphabet=label_chars, min_size=1, max_size=8)
@@ -39,7 +40,7 @@ def test_bids_path_parse_recovers_subject_entity(sub: str, filename: str) -> Non
 
 @given(scope=st.sampled_from(sorted(DATASET_SCOPES)))
 def test_bids_query_scope_round_trip(scope: str) -> None:
-    query = BidsQuery.from_filters(scope=scope)
+    query = build_bids_query(scope=scope)
     assert query.scopes == (scope,)
 
 
@@ -49,7 +50,7 @@ def test_bids_query_scope_round_trip(scope: str) -> None:
     )
 )
 def test_bids_query_extension_normalization(extensions: list[str]) -> None:
-    query = BidsQuery.from_filters(extension=extensions)
+    query = build_bids_query(extension=extensions)
     for ext in query.extensions:
         assert ext.startswith(".")
         assert ext == ext.lower()
@@ -57,6 +58,6 @@ def test_bids_query_extension_normalization(extensions: list[str]) -> None:
 
 @given(subject=labels)
 def test_bids_query_describe_is_deterministic(subject: str) -> None:
-    a = BidsQuery.from_filters(subject=subject).describe()
-    b = BidsQuery.from_filters(subject=subject).describe()
+    a = build_bids_query(subject=subject).describe()
+    b = build_bids_query(subject=subject).describe()
     assert a == b

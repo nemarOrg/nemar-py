@@ -24,9 +24,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from nemar._bids import BidsQuery
 from nemar._endpoint import DataEndpoint
+from nemar._models import BidsQuery
 from nemar._retry import RetryPolicy
+from nemar._selection import build_bids_query
 from nemar._transfer import VALID_BACKENDS, TransferOptions
 from nemar._verification import VerifyPolicy
 
@@ -114,7 +115,7 @@ class DownloadRequest:
         ).expanduser().resolve()
         include_patterns = _normalize_patterns(include)
         exclude_patterns = _normalize_patterns(exclude)
-        bids_query = BidsQuery.from_filters(
+        bids_query = build_bids_query(
             subject=subject,
             session=session,
             task=task,

@@ -13,6 +13,14 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from nemar._endpoint import DataEndpoint
 from nemar._errors import DatasetIndexError, ManifestError
 
+COMPOUND_EXTENSIONS = (".nii.gz", ".tsv.gz")
+DATASET_SCOPES = {"raw", "derivatives", "stimuli", "sourcedata", "code"}
+ENTITY_ALIASES = {
+    "subject": "sub",
+    "session": "ses",
+    "acquisition": "acq",
+}
+
 
 class DatasetVersion(BaseModel):
     """A version advertised by ``https://data.nemar.org/{dataset}/``."""
@@ -387,3 +395,163 @@ def _coerce_hash(value: Any) -> str | None:
     if value.startswith("W/"):
         value = value[2:]
     return value or None
+
+
+@dataclass(frozen=True)
+class BidsPath:
+    """Parsed BIDS semantics for one relative path.
+
+    Pure value type: fields plus a :meth:`parse` constructor. The
+    matching predicate (does this path satisfy a query?) lives next to
+    its consumer in :mod:`nemar._selection` — see ``_path_matches`` —
+    because it composes a ``BidsPath`` and a :class:`BidsQuery` and is
+    only ever invoked there.
+    """
+
+    path: str
+    entities: Mapping[str, str] = field(default_factory=dict)
+    datatype: str | None = None
+    suffix: str | None = None
+    extension: str | None = None
+    scope: str = "raw"
+    pipeline: str | None = None
+
+    @classmethod
+    def parse(cls, path: str) -> BidsPath:
+        """Parse a relative path into BIDS entities, datatype, suffix, extension."""
+        parts = PurePosixPath(path).parts
+        scope, pipeline, semantic_parts = _split_dataset_scope(parts)
+        filename = (
+            semantic_parts[-1] if semantic_parts else parts[-1] if parts else path
+        )
+        stem, extension = _split_extension(filename)
+        entities: dict[str, str] = {}
+
+        for dirname in semantic_parts[:-1]:
+            _add_entity_from_token(entities, dirname)
+
+        filename_tokens = stem.split("_")
+        for token in filename_tokens[:-1]:
+            _add_entity_from_token(entities, token)
+
+        suffix = (
+            filename_tokens[-1] if filename_tokens and filename_tokens[-1] else None
+        )
+        datatype = _parse_datatype(semantic_parts)
+        return cls(
+            path=path,
+            entities=entities,
+            datatype=datatype,
+            suffix=suffix,
+            extension=extension,
+            scope=scope,
+            pipeline=pipeline,
+        )
+
+
+@dataclass(frozen=True)
+class BidsQuery:
+    """A semantic BIDS query over manifest paths.
+
+    Pure value type: a frozen bundle of normalized filter tuples plus
+    two read-only helpers (:meth:`is_empty`, :meth:`describe`). The
+    builder that turns raw kwargs into a ``BidsQuery``
+    (``build_bids_query``) lives in :mod:`nemar._selection` because
+    that's where its consumers live, and matching against a
+    :class:`BidsPath` is also a selection-time operation there.
+    """
+
+    entities: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    datatypes: tuple[str, ...] = ()
+    suffixes: tuple[str, ...] = ()
+    extensions: tuple[str, ...] = ()
+    scopes: tuple[str, ...] = ()
+    pipelines: tuple[str, ...] = ()
+
+    def is_empty(self) -> bool:
+        """Return whether no semantic BIDS constraints were provided."""
+        return not (
+            self.entities
+            or self.datatypes
+            or self.suffixes
+            or self.extensions
+            or self.scopes
+            or self.pipelines
+        )
+
+    def describe(self) -> str:
+        """Return a compact user-facing representation of the query."""
+        parts: list[str] = []
+        for key, values in sorted(self.entities.items()):
+            parts.append(f"{key}={','.join(values)}")
+        if self.datatypes:
+            parts.append(f"datatype={','.join(self.datatypes)}")
+        if self.suffixes:
+            parts.append(f"suffix={','.join(self.suffixes)}")
+        if self.extensions:
+            parts.append(f"extension={','.join(self.extensions)}")
+        if self.scopes:
+            parts.append(f"scope={','.join(self.scopes)}")
+        if self.pipelines:
+            parts.append(f"pipeline={','.join(self.pipelines)}")
+        return "; ".join(parts) or "<empty>"
+
+
+def _split_dataset_scope(
+    parts: tuple[str, ...],
+) -> tuple[str, str | None, tuple[str, ...]]:
+    if not parts:
+        return "raw", None, parts
+    if parts[0] == "derivatives":
+        pipeline = parts[1] if len(parts) > 2 else None
+        semantic_parts = parts[2:] if pipeline is not None else parts[1:]
+        return "derivatives", pipeline, semantic_parts
+    if parts[0] in DATASET_SCOPES - {"raw", "derivatives"}:
+        return parts[0], None, parts[1:]
+    return "raw", None, parts
+
+
+def _split_extension(filename: str) -> tuple[str, str | None]:
+    lower = filename.lower()
+    for extension in COMPOUND_EXTENSIONS:
+        if lower.endswith(extension):
+            return filename[: -len(extension)], extension
+    path = PurePosixPath(filename)
+    if not path.suffix:
+        return filename, None
+    return filename[: -len(path.suffix)], path.suffix.lower()
+
+
+def _add_entity_from_token(entities: dict[str, str], token: str) -> None:
+    if "-" not in token:
+        return
+    key, value = token.split("-", 1)
+    if key and value:
+        entities[normalize_entity_key(key)] = value
+
+
+def _parse_datatype(parts: tuple[str, ...]) -> str | None:
+    directories = parts[:-1]
+    for index, dirname in enumerate(directories):
+        if not dirname.startswith("sub-"):
+            continue
+        datatype_index = index + 1
+        if datatype_index < len(directories) and directories[datatype_index].startswith(
+            "ses-"
+        ):
+            datatype_index += 1
+        if datatype_index < len(directories):
+            return directories[datatype_index]
+    return None
+
+
+def normalize_entity_key(key: str) -> str:
+    """Normalize a BIDS entity key (e.g. ``"subject"`` → ``"sub"``).
+
+    Module-public (no leading underscore) because both
+    :class:`BidsPath.parse` here and the ``build_bids_query`` builder in
+    :mod:`nemar._selection` need it. Keeping a single source of truth
+    for the alias table avoids drift between the parse side and the
+    query-construction side.
+    """
+    return ENTITY_ALIASES.get(key, key)

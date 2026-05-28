@@ -13,12 +13,11 @@ from pathlib import Path
 import httpx
 import pytest
 
-from nemar._bids import BidsQuery
 from nemar._download import LocalDataset
 from nemar._endpoint import DataEndpoint
 from nemar._models import DatasetFile, VersionManifest, parse_dataset_index
 from nemar._retry import RetryPolicy
-from nemar._selection import SelectionPlan
+from nemar._selection import SelectionPlan, build_bids_query
 from nemar._transport import fetch_json
 from nemar._verification import VerifyPolicy, assert_all_present
 from nemar.errors import (
@@ -99,7 +98,7 @@ def test_selection_zero_match_is_a_runtime_error():
     ) as info:
         SelectionPlan.build(
             files,
-            query=BidsQuery.from_filters(subject="002"),
+            query=build_bids_query(subject="002"),
             include=[],
             exclude=[],
         )
