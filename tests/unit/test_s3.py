@@ -18,10 +18,8 @@ import hashlib
 import json
 import socket
 
-import boto3
 import pytest
 import s3fs
-from moto.server import ThreadedMotoServer
 
 from nemar._errors import S3Error
 from nemar._models import DatasetFile
@@ -38,6 +36,20 @@ from nemar.s3 import (
     version_summary_url,
     version_url,
 )
+
+# ``moto`` and ``boto3`` are dev-only deps used by the in-memory S3
+# server. CI's minimal install does not pull them, so guard the import
+# and skip the S3Backend-transfer tests when missing. ``annex_key_for``
+# and the URL-helper tests above need neither — they keep running.
+try:
+    import boto3
+    from moto.server import ThreadedMotoServer
+
+    _moto_available = True
+except ImportError:
+    _moto_available = False
+    boto3 = None  # type: ignore[assignment]
+    ThreadedMotoServer = None  # type: ignore[assignment,misc]
 
 
 def test_canonical_constants() -> None:
@@ -303,6 +315,10 @@ def _policies() -> tuple[RetryPolicy, VerifyPolicy]:
     return RetryPolicy.default().with_attempts(0), VerifyPolicy()
 
 
+@pytest.mark.skipif(
+    not _moto_available,
+    reason="moto / boto3 not installed (dev group); install to run S3 chain tests.",
+)
 class TestS3BackendTransfer:
     """``S3Backend.transfer`` against a moto-backed bucket.
 

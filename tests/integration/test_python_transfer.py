@@ -6,12 +6,24 @@ import hashlib
 import socket
 from pathlib import Path
 
-import boto3
 import httpx
 import pytest
 import s3fs
-from moto.server import ThreadedMotoServer
 from tqdm.auto import tqdm
+
+# ``moto`` / ``boto3`` are dev-only deps for the in-memory S3 server
+# used by the chain integration tests. CI's minimal install does not
+# pull them, so guard and skip the chain tests when missing. The rest
+# of this module (HTTPS streaming tests) does not need either.
+try:
+    import boto3
+    from moto.server import ThreadedMotoServer
+
+    _moto_available = True
+except ImportError:
+    _moto_available = False
+    boto3 = None  # type: ignore[assignment]
+    ThreadedMotoServer = None  # type: ignore[assignment,misc]
 
 import nemar
 from nemar import _transfer
@@ -450,6 +462,10 @@ def moto_s3_chain(monkeypatch):
         server.stop()
 
 
+@pytest.mark.skipif(
+    not _moto_available,
+    reason="moto / boto3 not installed (dev group); install to run S3 chain tests.",
+)
 def test_chain_auto_fetches_from_s3_when_available(
     moto_s3_chain, tmp_path: Path
 ) -> None:
@@ -490,6 +506,10 @@ def test_chain_auto_fetches_from_s3_when_available(
     assert (tmp_path / "eeg" / "run-01.set").read_bytes() == content
 
 
+@pytest.mark.skipif(
+    not _moto_available,
+    reason="moto / boto3 not installed (dev group); install to run S3 chain tests.",
+)
 def test_chain_falls_back_to_https_when_s3_misses(
     moto_s3_chain, nemar_endpoint, tmp_path: Path
 ) -> None:
