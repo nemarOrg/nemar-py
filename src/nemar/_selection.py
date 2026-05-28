@@ -1,20 +1,24 @@
-"""SelectionPlan: a transparent record of NEMAR BIDS file selection.
+"""NEMAR BIDS file selection: a function over a manifest.
 
-This module owns the composition of three operations that previously lived in
-``_download._select_bids_files``:
+This module owns the composition of three operations that previously lived
+in ``_download._select_bids_files``:
 
 1. Apply a :class:`~nemar._bids.BidsQuery` to manifest paths.
 2. Narrow the result with include glob patterns.
 3. Subtract exclude glob patterns and force-keep essential BIDS root files.
 
-Instead of returning only the final list of files, :class:`SelectionPlan`
-preserves the *plan* of how the selection happened, which makes debugging,
-diagnostics, and future callers far easier.
+The public surface is the function :func:`select_files`, which returns
+a :class:`SelectionResult` carrying the selected files plus the small
+piece of diagnostic state the orchestrator actually consumes
+(unmatched include patterns, surfaced through
+:func:`raise_if_unmatched_includes`). The previous ``SelectionPlan``
+class dressed this linear flow as an entity with behaviour; the
+function + frozen result type is more honest about what is happening.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from difflib import get_close_matches
 
@@ -50,146 +54,146 @@ _MAX_HINT_VALUES = 10
 
 
 @dataclass(frozen=True)
-class SelectionPlan:
-    """A frozen record of how a NEMAR manifest was filtered.
+class SelectionResult:
+    """The output of :func:`select_files`.
 
-    Use :meth:`build` to construct an instance; the dataclass fields capture
-    everything that happened along the way so callers can inspect, log, or
-    surface diagnostics about the selection.
+    Carries the selected manifest entries plus the small piece of
+    diagnostic state the orchestrator needs to surface include-pattern
+    typos. Everything else the selection touches (intermediate match
+    sets, per-pattern matches, the essential carve-out) is internal
+    bookkeeping and does not leave the function.
     """
 
-    matched_by_query: tuple[str, ...]
-    included_by_pattern: Mapping[str, tuple[str, ...]]
-    excluded_by_pattern: Mapping[str, tuple[str, ...]]
-    essential_kept: tuple[str, ...]
+    selected: tuple[DatasetFile, ...]
     unmatched_includes: tuple[str, ...]
-    final: tuple[DatasetFile, ...]
 
-    @classmethod
-    def build(
-        cls,
-        files: Sequence[DatasetFile],
-        *,
-        query: _bids.BidsQuery,
-        include: Sequence[str],
-        exclude: Sequence[str],
-    ) -> SelectionPlan:
-        """Compute the selection plan for a manifest under the given filters.
 
-        Raises ``RuntimeError`` when a non-empty BIDS query matches zero files;
-        the message echoes the available subjects/sessions/tasks to help users
-        correct typos.
-        """
-        filenames = [file.path for file in files]
+def select_files(
+    files: Sequence[DatasetFile],
+    *,
+    query: _bids.BidsQuery,
+    include: Sequence[str],
+    exclude: Sequence[str],
+) -> SelectionResult:
+    """Compute the selection for a manifest under the given filters.
 
-        if query.is_empty():
-            matched = tuple(
-                filename
-                for filename in filenames
-                if not is_dotfile(filename)
-            )
-        else:
-            parsed = [
-                (file.path, _bids.BidsPath.parse(file.path))
-                for file in files
-                if not is_dotfile(file.path)
-            ]
-            matched = tuple(
-                path for path, bids_path in parsed if bids_path.matches(query)
-            )
-            if not matched:
-                raise SelectionError(_zero_match_message(query, parsed))
+    Three phases, in order:
 
-        matched_set = set(matched)
+    1. Apply ``query`` to manifest paths (or pass everything non-dotfile
+       through when the query is empty).
+    2. Narrow the result with ``include`` glob patterns (no-op when
+       ``include`` is empty).
+    3. Subtract ``exclude`` glob patterns, then re-add essential BIDS
+       root files plus — when the query is non-empty — the root-level
+       ``*.json`` / ``*.tsv`` sidecar sweep (Option A).
 
-        if include:
-            include_matches = glob_filter(filenames, include)
-            included_by_pattern = {
-                pattern: tuple(sorted(include_matches.get(pattern, ())))
-                for pattern in include
-            }
-            included_paths = {
-                filename
-                for matches in include_matches.values()
-                for filename in matches
-            }
-            matched_set &= included_paths
-        else:
-            include_matches = {}
-            included_by_pattern = {}
+    Raises :class:`~nemar._errors.SelectionError` when a non-empty BIDS
+    query matches zero files; the message echoes available
+    subjects/sessions/tasks to help users correct typos. Unmatched
+    include patterns are surfaced through :attr:`SelectionResult.unmatched_includes`
+    and the caller is expected to validate them via
+    :func:`raise_if_unmatched_includes`.
+    """
+    filenames = [file.path for file in files]
 
-        if exclude:
-            exclude_matches = glob_filter(filenames, exclude)
-            excluded_by_pattern = {
-                pattern: tuple(sorted(exclude_matches.get(pattern, ())))
-                for pattern in exclude
-            }
-            excluded_paths = {
-                filename
-                for matches in exclude_matches.values()
-                for filename in matches
-            }
-        else:
-            excluded_by_pattern = {}
-            excluded_paths = set()
-
-        essential = ESSENTIAL_BIDS_FILES & set(filenames)
-        # Root-level sidecar sweep ("Option A"): when a BIDS query is
-        # active, any ``*.json`` / ``*.tsv`` at the dataset root joins
-        # the essential set. Real NEMAR datasets keep BIDS-inherited
-        # sidecars at the root (``task-<label>_events.json``,
-        # ``space-*_coordsystem.json``, …) — without this sweep a
-        # ``subject=...`` query would pull the recording and its
-        # in-directory sidecars but miss the metadata that lets a
-        # downstream tool decode event columns or coordinate systems.
-        # The sweep over-fetches the small handful of root sidecars
-        # that don't strictly apply (e.g. ``task-other_events.json``
-        # for a recording we did not select); the alternative — a full
-        # BIDS-inheritance walk that matches by entity overlap — is an
-        # order of magnitude more code without a meaningful payoff on
-        # the dataset shapes NEMAR actually publishes.
-        if not query.is_empty():
-            essential = essential | {
-                filename
-                for filename in filenames
-                if "/" not in filename
-                and (filename.endswith(".json") or filename.endswith(".tsv"))
-            }
-        selected = (matched_set - excluded_paths) | essential
-        essential_kept = tuple(sorted(essential))
-
-        unmatched_includes = tuple(
-            pattern for pattern, matches in include_matches.items() if not matches
+    if query.is_empty():
+        matched = tuple(
+            filename
+            for filename in filenames
+            if not is_dotfile(filename)
         )
-
-        final = tuple(file for file in files if file.path in selected)
-
-        return cls(
-            matched_by_query=matched,
-            included_by_pattern=included_by_pattern,
-            excluded_by_pattern=excluded_by_pattern,
-            essential_kept=essential_kept,
-            unmatched_includes=unmatched_includes,
-            final=final,
+    else:
+        parsed = [
+            (file.path, _bids.BidsPath.parse(file.path))
+            for file in files
+            if not is_dotfile(file.path)
+        ]
+        matched = tuple(
+            path for path, bids_path in parsed if bids_path.matches(query)
         )
+        if not matched:
+            raise SelectionError(_zero_match_message(query, parsed))
 
-    def raise_if_unmatched_includes(self, *, filenames: list[str]) -> None:
-        """Raise ``RuntimeError`` with did-you-mean hints for unmatched includes.
+    matched_set = set(matched)
 
-        ``filenames`` is the full manifest path list, used to suggest close
-        matches via :func:`difflib.get_close_matches` for literal (non-glob)
-        patterns.
-        """
-        for pattern in self.unmatched_includes:
-            has_glob = any(char in pattern for char in "*?[")
-            candidates = [] if has_glob else get_close_matches(pattern, filenames)
-            if candidates:
-                extra = " Perhaps you mean: " + ", ".join(candidates[:5])
-            else:
-                extra = ""
-            raise SelectionError(
-                f"Could not find path in the NEMAR manifest: {pattern}.{extra}"
-            )
+    if include:
+        include_matches = glob_filter(filenames, include)
+        included_paths = {
+            filename
+            for matches in include_matches.values()
+            for filename in matches
+        }
+        matched_set &= included_paths
+    else:
+        include_matches = {}
+
+    if exclude:
+        exclude_matches = glob_filter(filenames, exclude)
+        excluded_paths = {
+            filename
+            for matches in exclude_matches.values()
+            for filename in matches
+        }
+    else:
+        excluded_paths = set()
+
+    essential = ESSENTIAL_BIDS_FILES & set(filenames)
+    # Root-level sidecar sweep ("Option A"): when a BIDS query is
+    # active, any ``*.json`` / ``*.tsv`` at the dataset root joins
+    # the essential set. Real NEMAR datasets keep BIDS-inherited
+    # sidecars at the root (``task-<label>_events.json``,
+    # ``space-*_coordsystem.json``, …) — without this sweep a
+    # ``subject=...`` query would pull the recording and its
+    # in-directory sidecars but miss the metadata that lets a
+    # downstream tool decode event columns or coordinate systems.
+    # The sweep over-fetches the small handful of root sidecars
+    # that don't strictly apply (e.g. ``task-other_events.json``
+    # for a recording we did not select); the alternative — a full
+    # BIDS-inheritance walk that matches by entity overlap — is an
+    # order of magnitude more code without a meaningful payoff on
+    # the dataset shapes NEMAR actually publishes.
+    if not query.is_empty():
+        essential = essential | {
+            filename
+            for filename in filenames
+            if "/" not in filename
+            and (filename.endswith(".json") or filename.endswith(".tsv"))
+        }
+    selected_paths = (matched_set - excluded_paths) | essential
+
+    unmatched_includes = tuple(
+        pattern for pattern, matches in include_matches.items() if not matches
+    )
+
+    selected = tuple(file for file in files if file.path in selected_paths)
+
+    return SelectionResult(
+        selected=selected,
+        unmatched_includes=unmatched_includes,
+    )
+
+
+def raise_if_unmatched_includes(
+    result: SelectionResult, *, filenames: Sequence[str]
+) -> None:
+    """Raise ``SelectionError`` with did-you-mean hints for unmatched includes.
+
+    ``filenames`` is the full manifest path list, used to suggest close
+    matches via :func:`difflib.get_close_matches` for literal (non-glob)
+    patterns. No-op when ``result.unmatched_includes`` is empty.
+    """
+    for pattern in result.unmatched_includes:
+        has_glob = any(char in pattern for char in "*?[")
+        candidates = (
+            [] if has_glob else get_close_matches(pattern, list(filenames))
+        )
+        if candidates:
+            extra = " Perhaps you mean: " + ", ".join(candidates[:5])
+        else:
+            extra = ""
+        raise SelectionError(
+            f"Could not find path in the NEMAR manifest: {pattern}.{extra}"
+        )
 
 
 def _zero_match_message(
@@ -198,7 +202,7 @@ def _zero_match_message(
 ) -> str:
     """Build the zero-match error message, with an Available: hint when useful.
 
-    Only called from :meth:`SelectionPlan.build` after a non-empty query
+    Only called from :func:`select_files` after a non-empty query
     matched zero files, so the query is always non-empty here.
     """
     base = f"No files matched the BIDS query: {query.describe()}."
@@ -220,7 +224,7 @@ def _zero_match_message(
 
 
 # Glob-style matching helpers. Previously lived in ``nemar._glob`` as a
-# standalone module; inlined here because :class:`SelectionPlan` is the
+# standalone module; inlined here because :func:`select_files` is the
 # only consumer of glob_filter, and ``is_dotfile`` is also a
 # selection-time predicate (skip ``.DS_Store``, ``.git`` etc. before BIDS
 # parsing). Keeping them in this module keeps the BIDS-selection logic

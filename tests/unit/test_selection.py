@@ -1,10 +1,14 @@
-"""Tests for the SelectionPlan value type."""
+"""Tests for the BIDS file selection function."""
 
 import pytest
 
 from nemar import _bids
 from nemar._models import DatasetFile
-from nemar._selection import SelectionPlan
+from nemar._selection import (
+    SelectionResult,
+    raise_if_unmatched_includes,
+    select_files,
+)
 from tests.fixtures.factories import make_dataset_file
 
 
@@ -12,7 +16,7 @@ def _files(paths: list[str]) -> list[DatasetFile]:
     return [make_dataset_file(path) for path in paths]
 
 
-def test_build_round_trips_trivial_selection() -> None:
+def test_select_returns_all_non_dotfiles_for_trivial_selection() -> None:
     """An empty query with no include/exclude returns all non-dotfiles in order."""
     paths = [
         "dataset_description.json",
@@ -21,22 +25,20 @@ def test_build_round_trips_trivial_selection() -> None:
     ]
     files = _files(paths)
 
-    plan = SelectionPlan.build(
+    result = select_files(
         files,
         query=_bids.BidsQuery(),
         include=[],
         exclude=[],
     )
 
-    assert [f.path for f in plan.final] == paths
-    assert plan.matched_by_query == tuple(paths)
-    assert plan.included_by_pattern == {}
-    assert plan.excluded_by_pattern == {}
-    assert plan.unmatched_includes == ()
+    assert isinstance(result, SelectionResult)
+    assert [f.path for f in result.selected] == paths
+    assert result.unmatched_includes == ()
 
 
-def test_essential_kept_contains_present_essentials() -> None:
-    """Essential BIDS root files survive when they exist in the manifest."""
+def test_essentials_survive_when_present_in_manifest() -> None:
+    """Essential BIDS root files survive even when an exclude pattern hits them."""
     files = _files(
         [
             "dataset_description.json",
@@ -46,19 +48,23 @@ def test_essential_kept_contains_present_essentials() -> None:
         ]
     )
 
-    plan = SelectionPlan.build(
+    result = select_files(
         files,
         query=_bids.BidsQuery(),
         include=["sub-001/eeg"],
         exclude=["*.fdt"],
     )
 
-    assert "dataset_description.json" in plan.essential_kept
-    assert "participants.tsv" in plan.essential_kept
+    selected_paths = {f.path for f in result.selected}
+    assert "dataset_description.json" in selected_paths
+    assert "participants.tsv" in selected_paths
+    # The recording survives the include; the .fdt does not.
+    assert "sub-001/eeg/sub-001_task-MMN_eeg.set" in selected_paths
+    assert "sub-001/eeg/sub-001_task-MMN_eeg.fdt" not in selected_paths
 
 
-def test_essential_kept_never_contains_absent_essentials() -> None:
-    """Essential names that aren't in the manifest are not synthesized."""
+def test_absent_essentials_are_not_synthesized() -> None:
+    """Essential names that aren't in the manifest are not invented."""
     files = _files(
         [
             "dataset_description.json",
@@ -66,16 +72,17 @@ def test_essential_kept_never_contains_absent_essentials() -> None:
         ]
     )
 
-    plan = SelectionPlan.build(
+    result = select_files(
         files,
         query=_bids.BidsQuery(),
         include=[],
         exclude=[],
     )
 
-    assert "participants.tsv" not in plan.essential_kept
-    assert "README" not in plan.essential_kept
-    assert "dataset_description.json" in plan.essential_kept
+    selected_paths = {f.path for f in result.selected}
+    assert "participants.tsv" not in selected_paths
+    assert "README" not in selected_paths
+    assert "dataset_description.json" in selected_paths
 
 
 def test_root_sidecars_auto_included_when_bids_query_active() -> None:
@@ -102,14 +109,14 @@ def test_root_sidecars_auto_included_when_bids_query_active() -> None:
         ]
     )
 
-    plan = SelectionPlan.build(
+    result = select_files(
         files,
         query=_bids.BidsQuery.from_filters(subject="001"),
         include=[],
         exclude=[],
     )
 
-    selected_paths = {f.path for f in plan.final}
+    selected_paths = {f.path for f in result.selected}
     # The recording lands.
     assert "sub-001/eeg/sub-001_task-MMN_eeg.set" in selected_paths
     # The unrelated subject does NOT land.
@@ -141,14 +148,14 @@ def test_root_sidecars_not_auto_included_without_bids_query() -> None:
         ]
     )
 
-    plan = SelectionPlan.build(
+    result = select_files(
         files,
         query=_bids.BidsQuery(),  # empty
         include=["sub-001/**"],
         exclude=[],
     )
 
-    selected_paths = {f.path for f in plan.final}
+    selected_paths = {f.path for f in result.selected}
     # Recording landed via the path include.
     assert "sub-001/eeg/sub-001_task-MMN_eeg.set" in selected_paths
     # Essential still kept.
@@ -175,14 +182,14 @@ def test_root_sidecars_sweep_skips_subdirectory_jsons() -> None:
         ]
     )
 
-    plan = SelectionPlan.build(
+    result = select_files(
         files,
         query=_bids.BidsQuery.from_filters(subject="001"),
         include=[],
         exclude=[],
     )
 
-    selected_paths = {f.path for f in plan.final}
+    selected_paths = {f.path for f in result.selected}
     assert "sub-001/eeg/sub-001_task-MMN_eeg.set" in selected_paths
     assert "sub-001/eeg/sub-001_task-MMN_eeg.json" in selected_paths
     # The other subject's sidecar is NOT swept — the rule is root-only.
@@ -211,14 +218,14 @@ def test_subject_query_does_not_match_derivatives_by_default() -> None:
         ]
     )
 
-    plan = SelectionPlan.build(
+    result = select_files(
         files,
         query=_bids.BidsQuery.from_filters(subject="02"),
         include=[],
         exclude=[],
     )
 
-    selected = {f.path for f in plan.final}
+    selected = {f.path for f in result.selected}
     assert "sub-02/ses-01/eeg/sub-02_ses-01_task-images_eeg.bdf" in selected
     assert "sub-02/ses-01/eeg/sub-02_ses-01_task-images_events.tsv" in selected
     # The over-fetch is gone — derivatives stay opt-in.
@@ -241,7 +248,7 @@ def test_explicit_derivatives_scope_still_works() -> None:
         ]
     )
 
-    plan = SelectionPlan.build(
+    result = select_files(
         files,
         query=_bids.BidsQuery.from_filters(
             subject="02",
@@ -252,7 +259,7 @@ def test_explicit_derivatives_scope_still_works() -> None:
         exclude=[],
     )
 
-    selected = {f.path for f in plan.final}
+    selected = {f.path for f in result.selected}
     # Only the derivative landed — raw stays out because scope was
     # narrowed to derivatives only.
     assert (
@@ -262,7 +269,7 @@ def test_explicit_derivatives_scope_still_works() -> None:
     assert "sub-02/ses-01/eeg/sub-02_ses-01_task-images_eeg.bdf" not in selected
 
 
-def test_excluded_by_pattern_records_paths_but_keeps_essentials() -> None:
+def test_exclude_pattern_does_not_strip_essentials() -> None:
     """Excluding essentials by pattern is overridden by the essential carve-out."""
     files = _files(
         [
@@ -272,20 +279,19 @@ def test_excluded_by_pattern_records_paths_but_keeps_essentials() -> None:
         ]
     )
 
-    plan = SelectionPlan.build(
+    result = select_files(
         files,
         query=_bids.BidsQuery(),
         include=[],
         exclude=["*.tsv", "*.json"],
     )
 
-    final_paths = {f.path for f in plan.final}
+    final_paths = {f.path for f in result.selected}
+    # The essentials survive the exclude — they're force-kept.
     assert "dataset_description.json" in final_paths
     assert "participants.tsv" in final_paths
-    # The exclude record itself reports the raw match, even if essentials
-    # ultimately survive.
-    assert "participants.tsv" in plan.excluded_by_pattern["*.tsv"]
-    assert "dataset_description.json" in plan.excluded_by_pattern["*.json"]
+    # Non-essential files matched by the exclude are dropped.
+    assert "sub-001/eeg/sub-001_task-MMN_eeg.set" in final_paths
 
 
 def test_unmatched_includes_populated_for_literal_miss() -> None:
@@ -297,14 +303,14 @@ def test_unmatched_includes_populated_for_literal_miss() -> None:
         ]
     )
 
-    plan = SelectionPlan.build(
+    result = select_files(
         files,
         query=_bids.BidsQuery(),
         include=["participant.tsv"],
         exclude=[],
     )
 
-    assert "participant.tsv" in plan.unmatched_includes
+    assert "participant.tsv" in result.unmatched_includes
 
 
 def test_raise_if_unmatched_includes_suggests_close_match() -> None:
@@ -316,7 +322,7 @@ def test_raise_if_unmatched_includes_suggests_close_match() -> None:
         ]
     )
 
-    plan = SelectionPlan.build(
+    result = select_files(
         files,
         query=_bids.BidsQuery(),
         include=["participant.tsv"],
@@ -324,14 +330,14 @@ def test_raise_if_unmatched_includes_suggests_close_match() -> None:
     )
 
     with pytest.raises(RuntimeError, match="Perhaps you mean"):
-        plan.raise_if_unmatched_includes(filenames=[f.path for f in files])
+        raise_if_unmatched_includes(result, filenames=[f.path for f in files])
 
 
 def test_raise_if_unmatched_includes_no_suggestion_for_unique_pattern() -> None:
     """A literal pattern with no close match falls back to no-suggestion error."""
     files = _files(["sub-001/eeg/sub-001_task-MMN_eeg.set"])
 
-    plan = SelectionPlan.build(
+    result = select_files(
         files,
         query=_bids.BidsQuery(),
         include=["totally-unrelated-name"],
@@ -339,10 +345,31 @@ def test_raise_if_unmatched_includes_no_suggestion_for_unique_pattern() -> None:
     )
 
     with pytest.raises(RuntimeError) as info:
-        plan.raise_if_unmatched_includes(filenames=[f.path for f in files])
+        raise_if_unmatched_includes(result, filenames=[f.path for f in files])
 
     assert "Perhaps you mean" not in str(info.value)
     assert "Could not find path in the NEMAR manifest" in str(info.value)
+
+
+def test_raise_if_unmatched_includes_is_noop_when_all_matched() -> None:
+    """No unmatched includes → no raise. The helper just returns."""
+    files = _files(
+        [
+            "participants.tsv",
+            "sub-001/eeg/sub-001_task-MMN_eeg.set",
+        ]
+    )
+
+    result = select_files(
+        files,
+        query=_bids.BidsQuery(),
+        include=["participants.tsv"],
+        exclude=[],
+    )
+
+    # Should not raise; result.unmatched_includes is empty.
+    raise_if_unmatched_includes(result, filenames=[f.path for f in files])
+    assert result.unmatched_includes == ()
 
 
 def test_zero_match_query_without_hintable_entities_omits_available() -> None:
@@ -350,7 +377,7 @@ def test_zero_match_query_without_hintable_entities_omits_available() -> None:
     files = _files(["dataset_description.json", "README.md"])
 
     with pytest.raises(RuntimeError) as info:
-        SelectionPlan.build(
+        select_files(
             files,
             query=_bids.BidsQuery.from_filters(subject="001"),
             include=[],
@@ -373,7 +400,7 @@ def test_zero_match_query_lists_available_entities() -> None:
     )
 
     with pytest.raises(RuntimeError) as info:
-        SelectionPlan.build(
+        select_files(
             files,
             query=_bids.BidsQuery.from_filters(subject="999"),
             include=[],

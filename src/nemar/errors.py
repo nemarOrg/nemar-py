@@ -19,8 +19,9 @@ Subclasses:
   :func:`nemar._models.VersionManifest.parse` and
   :class:`nemar._client.NEMARClient` on manifest payload issues.
 * :class:`SelectionError` — BIDS selection (zero match, unmatched includes,
-  case collisions). Raised by :class:`nemar._selection.SelectionPlan` and
-  the case-collision guard in :func:`nemar._download._run`.
+  case collisions). Raised by :func:`nemar._selection.select_files` /
+  :func:`nemar._selection.raise_if_unmatched_includes` and the
+  case-collision guard in :func:`nemar._download._run`.
 * :class:`TransportError` — JSON-fetch retries exhausted, HTTP errors,
   JSON-decode failures. Raised by :func:`nemar._transport.fetch_json`.
   (Off-origin redirects raise :class:`EndpointError`, not ``TransportError``.)
