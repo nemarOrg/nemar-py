@@ -1,8 +1,16 @@
-"""Tests for BIDS-aware query parsing."""
+"""Tests for BIDS-aware query parsing.
+
+The value types (:class:`BidsPath`, :class:`BidsQuery`) live in
+:mod:`nemar._models`; the operations that build a query from raw kwargs
+(:func:`build_bids_query`) and match a parsed path against a query
+(:func:`_path_matches`) live in :mod:`nemar._selection`, next to their
+consumer. Tests import each from its real home.
+"""
 
 import pytest
 
-from nemar._bids import BidsPath, BidsQuery
+from nemar._models import BidsPath
+from nemar._selection import _path_matches, build_bids_query
 
 
 @pytest.mark.parametrize(
@@ -204,7 +212,9 @@ def test_bids_path_parse_semantics(path, expected) -> None:
 )
 def test_bids_query_matches_semantic_filters(path, filters, expected) -> None:
     """BIDS queries apply every provided semantic constraint."""
-    assert BidsPath.parse(path).matches(BidsQuery.from_filters(**filters)) is expected
+    assert (
+        _path_matches(BidsPath.parse(path), build_bids_query(**filters)) is expected
+    )
 
 
 @pytest.mark.parametrize(
@@ -238,7 +248,7 @@ def test_bids_query_matches_semantic_filters(path, filters, expected) -> None:
 )
 def test_bids_query_describe(filters, expected) -> None:
     """Query descriptions remain compact and deterministic."""
-    assert BidsQuery.from_filters(**filters).describe() == expected
+    assert build_bids_query(**filters).describe() == expected
 
 
 @pytest.mark.parametrize(
@@ -258,7 +268,7 @@ def test_bids_query_describe(filters, expected) -> None:
 )
 def test_bids_query_normalizes_entity_values(filters, expected_entities) -> None:
     """BIDS entity values are normalized without losing aliases."""
-    assert BidsQuery.from_filters(**filters).entities == expected_entities
+    assert build_bids_query(**filters).entities == expected_entities
 
 
 @pytest.mark.parametrize(
@@ -272,7 +282,7 @@ def test_bids_query_normalizes_entity_values(filters, expected_entities) -> None
 def test_bids_query_rejects_bad_generic_entity(entity) -> None:
     """Generic entity filters must be explicit key=value pairs."""
     with pytest.raises(ValueError, match="key=value"):
-        BidsQuery.from_filters(entity=entity)
+        build_bids_query(entity=entity)
 
 
 @pytest.mark.parametrize(
@@ -285,4 +295,4 @@ def test_bids_query_rejects_bad_generic_entity(entity) -> None:
 def test_bids_query_rejects_unknown_scope(scope) -> None:
     """Scope filters must be one of the advertised BIDS dataset scopes."""
     with pytest.raises(ValueError, match="Unknown BIDS dataset scope"):
-        BidsQuery.from_filters(scope=scope)
+        build_bids_query(scope=scope)

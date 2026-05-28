@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>nemar-py — Architecture audit · 2026-05-28</title>
+<style>
+  :root {
+    --ink: #1b1b1b;
+    --muted: #6b6b6b;
+    --hair: #d6d6d6;
+    --tint: #f6f6f4;
+    --accent: #0072B2;       /* Okabe-Ito blue */
+    --warm:   #D55E00;       /* Okabe-Ito vermillion */
+    --green:  #009E73;       /* Okabe-Ito bluish green */
+    --bg: #ffffff;
+  }
+  html, body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 15px;
+    line-height: 1.55;
+  }
+  main {
+    max-width: 880px;
+    margin: 48px auto 96px;
+    padding: 0 24px;
+  }
+  h1 {
+    font-size: 28px;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+  h2 {
+    font-size: 19px;
+    margin: 40px 0 12px;
+    padding-top: 16px;
+    border-top: 1px solid var(--hair);
+    letter-spacing: -0.005em;
+  }
+  h3 {
+    font-size: 16px;
+    margin: 24px 0 6px;
+  }
+  .meta {
+    color: var(--muted);
+    font-size: 13px;
+    margin-bottom: 32px;
+  }
+  .lede {
+    color: var(--ink);
+    font-size: 15px;
+    background: var(--tint);
+    border-left: 3px solid var(--accent);
+    padding: 12px 16px;
+    margin: 0 0 12px;
+  }
+  code, pre {
+    font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 13px;
+  }
+  code {
+    background: var(--tint);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    margin: 8px 0 24px;
+  }
+  th, td {
+    text-align: left;
+    vertical-align: top;
+    padding: 9px 10px;
+    border-bottom: 1px solid var(--hair);
+  }
+  th {
+    background: var(--tint);
+    font-weight: 600;
+  }
+  td.rank {
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+    width: 30px;
+  }
+  .card {
+    border: 1px solid var(--hair);
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin: 18px 0;
+  }
+  .card h3 {
+    margin: 0 0 8px;
+    font-size: 16px;
+  }
+  .row {
+    display: grid;
+    grid-template-columns: 132px 1fr;
+    gap: 4px 16px;
+    margin-top: 8px;
+  }
+  .label {
+    color: var(--muted);
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding-top: 1px;
+  }
+  .verdict {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 3px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .verdict.fold  { background: rgba(213, 94, 0, 0.12);  color: var(--warm); }
+  .verdict.keep  { background: rgba(0, 158, 115, 0.12); color: var(--green); }
+  .small { color: var(--muted); font-size: 13px; }
+  .next {
+    background: var(--tint);
+    border-radius: 6px;
+    padding: 18px 22px;
+    margin-top: 30px;
+  }
+  .next h2 { border-top: none; margin-top: 0; }
+  .quote {
+    color: var(--muted);
+    font-style: italic;
+  }
+</style>
+</head>
+<body>
+<main>
+
+  <h1>Architecture audit — <code>src/nemar/</code></h1>
+  <div class="meta">2026-05-28 · <code>main @ f722dbc</code> · run via <code>/improve-codebase-architecture</code></div>
+
+  <p class="lede">
+    Four <strong>deepening opportunities</strong> in <code>src/nemar/</code>. Each one passes the
+    <em>deletion test</em> — removing the module concentrates complexity, or in these cases,
+    <em>removes</em> complexity that was never earning its keep. Two further candidates were considered
+    and ruled out as marginal keepers. Interface designs are deliberately not yet proposed; pick one
+    and I'll grill the shape with you.
+  </p>
+
+  <h2>Candidates (ranked by friction-per-LOC)</h2>
+
+  <!-- 1 -->
+  <div class="card">
+    <h3>① <code>BidsQuery</code> + <code>BidsPath</code> are knit at a distance</h3>
+    <div class="row">
+      <div class="label">Files</div>
+      <div>
+        <code>src/nemar/_bids.py:19–78</code> (<code>BidsPath</code>),
+        <code>src/nemar/_bids.py:82–147</code> (<code>BidsQuery.from_filters</code>),
+        plus the matching predicate that actually fires in
+        <code>src/nemar/_selection.py</code>.
+      </div>
+      <div class="label">Symptom</div>
+      <div>
+        Two value types live in one module; the matching that joins them lives in another.
+        Reading "what did my BIDS filter just do?" forces a bounce across three files
+        (<code>_bids.py</code> for the path parse, <code>_bids.py</code> again for the filter shape,
+        <code>_selection.py</code> for <code>BidsPath.matches()</code>). The interface promises a
+        semantic BIDS query; the actual semantics live in the consumer.
+      </div>
+      <div class="label">Deletion test</div>
+      <div>
+        Fold the matching predicate into <code>_selection.py</code> — no complexity concentrates anywhere
+        new, the matching logic lands one read away from the plan builder that calls it.
+        Keep the dumb value types (<code>BidsPath</code>, <code>BidsQuery</code>) close to their data.
+      </div>
+      <div class="label">Direction</div>
+      <div>
+        Hoist <code>BidsPath</code> + <code>BidsQuery</code> to <code>_models.py</code>
+        (dumb value types live with other dumb value types);
+        move <code>matches()</code> and <code>.from_filters()</code> normalization into
+        <code>_selection.py</code> so semantics live with the consumer.
+        <span class="verdict fold">Fold</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2 -->
+  <div class="card">
+    <h3>② <code>SelectionPlan</code> as a class masks the flow it implements</h3>
+    <div class="row">
+      <div class="label">Files</div>
+      <div><code>src/nemar/_selection.py:45–268</code></div>
+      <div class="label">Symptom</div>
+      <div>
+        Three operations on one object, but they are not a cohesive composition:
+        <code>.build()</code> (classmethod, three hidden phases),
+        <code>.raise_if_unmatched_includes()</code> (validation),
+        <code>.final</code> (the result). The orchestrator calls all three in sequence
+        (<code>_download.py:298–305</code>). The class is a carrier for "selection result plus diagnostic
+        metadata," dressed as an entity with behaviour. The interface masks the flow.
+      </div>
+      <div class="label">Deletion test</div>
+      <div>
+        Promote <code>.build()</code> to a module-level <code>select_files(...)</code> that returns
+        <code>(selected, unmatched_includes)</code>. The orchestrator reads top-to-bottom; the
+        diagnostic carrier disappears into a tuple. No complexity concentrates — the three steps
+        were already linear.
+      </div>
+      <div class="label">Direction</div>
+      <div>
+        Replace the class with a module-level function;
+        or reduce it to a pure <code>@dataclass(frozen=True)</code> result type
+        with no methods at all.
+        <span class="verdict fold">Fold</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3 -->
+  <div class="card">
+    <h3>③ <code>LocalDataset</code> is a two-method class with one caller</h3>
+    <div class="row">
+      <div class="label">Files</div>
+      <div><code>src/nemar/_download.py:60–120</code></div>
+      <div class="label">Symptom</div>
+      <div>
+        A two-method dataclass (<code>.from_dir()</code>, <code>.assert_compatible_with()</code>) that
+        was folded into <code>_download.py</code> in a previous simplification round. Its docstring
+        concedes it is inlined here because <code>_run</code> is its only caller.
+        Two public methods, one consumer — the canonical shallow shape.
+      </div>
+      <div class="label">Deletion test</div>
+      <div>
+        Inlining both methods into <code>_run</code> after the manifest fetch costs ~35 LOC of
+        orchestrator and kills one level of indirection in the critical path. The compatibility check
+        is one of the six orchestration steps; it does not deserve its own type.
+      </div>
+      <div class="label">Direction</div>
+      <div>
+        Inline into <code>_run</code> as a small block (or a module-private function); drop the class.
+        <span class="verdict fold">Fold</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4 -->
+  <div class="card">
+    <h3>④ Error re-export split: <code>errors.py</code> ↔ <code>_errors.py</code></h3>
+    <div class="row">
+      <div class="label">Files</div>
+      <div>
+        <code>src/nemar/errors.py</code> (36 lines of re-exports),
+        <code>src/nemar/_errors.py</code> (128 lines of definitions).
+      </div>
+      <div class="label">Symptom</div>
+      <div>
+        Every exception is defined in <code>_errors.py</code> and re-exported in <code>errors.py</code>.
+        The split was meant to keep "internals private," but exceptions are <em>fundamentally</em> user-facing
+        (callers catch them by class). There is no internal-only exception in the tree. Internal code uses
+        <code>from nemar._errors import …</code>; user code uses <code>from nemar.errors import …</code> —
+        two namespaces for one domain.
+      </div>
+      <div class="label">Deletion test</div>
+      <div>
+        Rename <code>_errors.py</code> → <code>errors.py</code>; delete the re-export file; update
+        internal imports. No complexity concentrates; pure ceremony evaporates.
+      </div>
+      <div class="label">Direction</div>
+      <div>
+        Single public <code>errors.py</code>; one import path; one home.
+        <span class="verdict fold">Fold</span>
+      </div>
+    </div>
+  </div>
+
+  <h2>Ruled out — these earn their keep</h2>
+
+  <table>
+    <thead>
+      <tr><th>Module</th><th>Why it stays</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>TransferBackend</code> Protocol<br><span class="small">(<code>_transfer.py:112</code>)</span></td>
+        <td>Real seam — three adapters (<code>PythonBackend</code>, <code>DataLadBackend</code>, <code>S3Backend</code>) implement it.
+          Deletion would scatter per-backend error handling and policy threading.</td>
+      </tr>
+      <tr>
+        <td><code>LayeredBackend</code><br><span class="small">(<code>_transfer.py:141</code>)</span></td>
+        <td>Carries the S3/DataLad/HTTPS composition. Deletion would push the try/except + dual invocation
+          up into the orchestrator's six-step algorithm.</td>
+      </tr>
+      <tr>
+        <td><code>DownloadRequest</code><br><span class="small">(<code>_request.py:38</code>)</span></td>
+        <td><code>from_kwargs</code> is the single normalization point for 25+ kwargs. Deletion would scatter
+          type-checking, path expansion, endpoint validation, and policy construction across the public
+          <code>download()</code> signature.</td>
+      </tr>
+      <tr>
+        <td><code>VerifyPolicy</code><br><span class="small">(<code>_verification.py</code>)</span></td>
+        <td>Owns predicate + policy + assertion + case-collision guard in one small API. Every caller speaks
+          the same language. Deep by every measure.</td>
+      </tr>
+      <tr>
+        <td><code>RetryPolicy</code><br><span class="small">(<code>_retry.py</code>)</span></td>
+        <td>Shared by JSON-fetch and per-file-stream retry loops. Deletion duplicates backoff,
+          status-classification, and exception-mapping across two retry loops.</td>
+      </tr>
+      <tr>
+        <td><code>DataEndpoint</code><br><span class="small">(<code>_endpoint.py:28–76</code>)</span></td>
+        <td>Borderline. Thin wrapper, but the "no off-origin URL" invariant is real and currently lives in
+          one place. Marginal keeper; revisit only if the validation logic ever grows. <span class="verdict keep">Keep</span></td>
+      </tr>
+      <tr>
+        <td><code>TransferOptions</code><br><span class="small">(<code>_transfer.py:93</code>)</span></td>
+        <td>Bag of three knobs, no behaviour. But it isolates transfer-specific policy from the broader
+          request, which the recent S3 chain refactor leaned on. Keep until it grows behaviour worth
+          moving. <span class="verdict keep">Keep</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Summary</h2>
+
+  <table>
+    <thead>
+      <tr><th class="rank">#</th><th>Candidate</th><th>Direction</th><th>Rough LOC delta</th></tr>
+    </thead>
+    <tbody>
+      <tr><td class="rank">1</td><td><code>BidsQuery</code> + <code>BidsPath</code></td><td>Hoist value types; move semantics to <code>_selection.py</code></td><td>−1 module, −0 LOC</td></tr>
+      <tr><td class="rank">2</td><td><code>SelectionPlan</code></td><td>Promote to <code>select_files()</code> function (or dumb result type)</td><td>−1 class, −30 LOC</td></tr>
+      <tr><td class="rank">3</td><td><code>LocalDataset</code></td><td>Inline into <code>_run</code></td><td>−1 class, −20 LOC</td></tr>
+      <tr><td class="rank">4</td><td>Error re-export split</td><td>Collapse <code>_errors.py</code> → <code>errors.py</code></td><td>−1 file, −30 LOC</td></tr>
+    </tbody>
+  </table>
+
+  <div class="next">
+    <h2>Next step</h2>
+    <p>
+      Pick one to drill into. I'll walk the design tree with you — constraints, dependencies, the shape
+      of the deepened module, what tests survive. None of the four needs the others to land; they can
+      each ship in isolation.
+    </p>
+    <p class="quote">
+      Recommendation: <strong>start with ②</strong> (<code>SelectionPlan</code>) — highest friction-per-LOC,
+      no public-API change, smallest blast radius.
+    </p>
+  </div>
+
+</main>
+</body>
+</html>

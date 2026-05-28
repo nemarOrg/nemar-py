@@ -6,11 +6,15 @@ from pathlib import Path
 import httpx
 import pytest
 
-from nemar import _bids, _download, fetch_dataset_index
+from nemar import _download, fetch_dataset_index
 from nemar._download import download
-from nemar._models import DatasetFile
+from nemar._models import BidsQuery, DatasetFile
 from nemar._request import DownloadRequest
-from nemar._selection import raise_if_unmatched_includes, select_files
+from nemar._selection import (
+    build_bids_query,
+    raise_if_unmatched_includes,
+    select_files,
+)
 from nemar._verification import (
     VerifyPolicy,
     VerifyResult,
@@ -36,7 +40,7 @@ def dataset_files(paths: list[str]) -> list[DatasetFile]:
                 "sub-001/eeg/file.fdt",
                 "sub-002/eeg/file.set",
             ],
-            _bids.BidsQuery(),
+            BidsQuery(),
             ["sub-001/eeg"],
             ["*.fdt"],
             [
@@ -55,7 +59,7 @@ def dataset_files(paths: list[str]) -> list[DatasetFile]:
                 "sub-002/eeg/sub-002_task-MMN_run-01_eeg.set",
                 "sub-001/beh/sub-001_task-MMN_events.tsv",
             ],
-            _bids.BidsQuery.from_filters(
+            build_bids_query(
                 subject="sub-001",
                 task="task-MMN",
                 datatype="eeg",
@@ -76,7 +80,7 @@ def dataset_files(paths: list[str]) -> list[DatasetFile]:
                 "sub-001/eeg/sub-001_task-MMN_run-01_eeg.set",
                 "sub-001/eeg/sub-001_task-MMN_run-02_eeg.set",
             ],
-            _bids.BidsQuery.from_filters(subject="001", task="MMN"),
+            build_bids_query(subject="001", task="MMN"),
             ["*run-02*"],
             [],
             [
@@ -92,7 +96,7 @@ def dataset_files(paths: list[str]) -> list[DatasetFile]:
                 "derivatives/eeglab/sub-001/eeg/sub-001_task-MMN_desc-clean_eeg.set",
                 "derivatives/other/sub-001/eeg/sub-001_task-MMN_desc-clean_eeg.set",
             ],
-            _bids.BidsQuery.from_filters(
+            build_bids_query(
                 scope="derivatives",
                 pipeline="eeglab",
                 subject="001",
@@ -112,7 +116,7 @@ def dataset_files(paths: list[str]) -> list[DatasetFile]:
                 "stimuli/task-MMN/deviant_stereo.wav",
                 "stimuli/task-P3/target.bmp",
             ],
-            _bids.BidsQuery.from_filters(scope="stimuli", task="MMN"),
+            build_bids_query(scope="stimuli", task="MMN"),
             [],
             [],
             [
@@ -151,7 +155,7 @@ def test_select_bids_files_errors_when_bids_query_has_no_matches() -> None:
     with pytest.raises(RuntimeError, match="No files matched the BIDS query"):
         select_files(
             files,
-            query=_bids.BidsQuery.from_filters(subject="002"),
+            query=build_bids_query(subject="002"),
             include=[],
             exclude=[],
         )
@@ -168,7 +172,7 @@ def test_select_bids_files_suggests_close_include() -> None:
     ]
     result = select_files(
         files,
-        query=_bids.BidsQuery(),
+        query=BidsQuery(),
         include=["participant.tsv"],
         exclude=[],
     )

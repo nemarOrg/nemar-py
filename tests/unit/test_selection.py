@@ -2,10 +2,10 @@
 
 import pytest
 
-from nemar import _bids
-from nemar._models import DatasetFile
+from nemar._models import BidsQuery, DatasetFile
 from nemar._selection import (
     SelectionResult,
+    build_bids_query,
     raise_if_unmatched_includes,
     select_files,
 )
@@ -27,7 +27,7 @@ def test_select_returns_all_non_dotfiles_for_trivial_selection() -> None:
 
     result = select_files(
         files,
-        query=_bids.BidsQuery(),
+        query=BidsQuery(),
         include=[],
         exclude=[],
     )
@@ -50,7 +50,7 @@ def test_essentials_survive_when_present_in_manifest() -> None:
 
     result = select_files(
         files,
-        query=_bids.BidsQuery(),
+        query=BidsQuery(),
         include=["sub-001/eeg"],
         exclude=["*.fdt"],
     )
@@ -74,7 +74,7 @@ def test_absent_essentials_are_not_synthesized() -> None:
 
     result = select_files(
         files,
-        query=_bids.BidsQuery(),
+        query=BidsQuery(),
         include=[],
         exclude=[],
     )
@@ -111,7 +111,7 @@ def test_root_sidecars_auto_included_when_bids_query_active() -> None:
 
     result = select_files(
         files,
-        query=_bids.BidsQuery.from_filters(subject="001"),
+        query=build_bids_query(subject="001"),
         include=[],
         exclude=[],
     )
@@ -150,7 +150,7 @@ def test_root_sidecars_not_auto_included_without_bids_query() -> None:
 
     result = select_files(
         files,
-        query=_bids.BidsQuery(),  # empty
+        query=BidsQuery(),  # empty
         include=["sub-001/**"],
         exclude=[],
     )
@@ -184,7 +184,7 @@ def test_root_sidecars_sweep_skips_subdirectory_jsons() -> None:
 
     result = select_files(
         files,
-        query=_bids.BidsQuery.from_filters(subject="001"),
+        query=build_bids_query(subject="001"),
         include=[],
         exclude=[],
     )
@@ -220,7 +220,7 @@ def test_subject_query_does_not_match_derivatives_by_default() -> None:
 
     result = select_files(
         files,
-        query=_bids.BidsQuery.from_filters(subject="02"),
+        query=build_bids_query(subject="02"),
         include=[],
         exclude=[],
     )
@@ -250,7 +250,7 @@ def test_explicit_derivatives_scope_still_works() -> None:
 
     result = select_files(
         files,
-        query=_bids.BidsQuery.from_filters(
+        query=build_bids_query(
             subject="02",
             scope="derivatives",
             pipeline="epoched",
@@ -281,7 +281,7 @@ def test_exclude_pattern_does_not_strip_essentials() -> None:
 
     result = select_files(
         files,
-        query=_bids.BidsQuery(),
+        query=BidsQuery(),
         include=[],
         exclude=["*.tsv", "*.json"],
     )
@@ -305,7 +305,7 @@ def test_unmatched_includes_populated_for_literal_miss() -> None:
 
     result = select_files(
         files,
-        query=_bids.BidsQuery(),
+        query=BidsQuery(),
         include=["participant.tsv"],
         exclude=[],
     )
@@ -324,7 +324,7 @@ def test_raise_if_unmatched_includes_suggests_close_match() -> None:
 
     result = select_files(
         files,
-        query=_bids.BidsQuery(),
+        query=BidsQuery(),
         include=["participant.tsv"],
         exclude=[],
     )
@@ -339,7 +339,7 @@ def test_raise_if_unmatched_includes_no_suggestion_for_unique_pattern() -> None:
 
     result = select_files(
         files,
-        query=_bids.BidsQuery(),
+        query=BidsQuery(),
         include=["totally-unrelated-name"],
         exclude=[],
     )
@@ -362,7 +362,7 @@ def test_raise_if_unmatched_includes_is_noop_when_all_matched() -> None:
 
     result = select_files(
         files,
-        query=_bids.BidsQuery(),
+        query=BidsQuery(),
         include=["participants.tsv"],
         exclude=[],
     )
@@ -379,7 +379,7 @@ def test_zero_match_query_without_hintable_entities_omits_available() -> None:
     with pytest.raises(RuntimeError) as info:
         select_files(
             files,
-            query=_bids.BidsQuery.from_filters(subject="001"),
+            query=build_bids_query(subject="001"),
             include=[],
             exclude=[],
         )
@@ -402,7 +402,7 @@ def test_zero_match_query_lists_available_entities() -> None:
     with pytest.raises(RuntimeError) as info:
         select_files(
             files,
-            query=_bids.BidsQuery.from_filters(subject="999"),
+            query=build_bids_query(subject="999"),
             include=[],
             exclude=[],
         )

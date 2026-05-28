@@ -25,11 +25,11 @@ try:
 except _metadata.PackageNotFoundError:
     __version__ = "0.0.0"
 
-from nemar._bids import BidsQuery as BidsQuery
 from nemar._client import NEMARClient as NEMARClient
 from nemar._download import download as download
 from nemar._download import fetch_dataset_index as fetch_dataset_index
 from nemar._download import list_dataset_versions as list_dataset_versions
+from nemar._models import BidsQuery as BidsQuery
 from nemar._verification import VerifyPolicy as VerifyPolicy
 from nemar.errors import DataLadError as DataLadError
 from nemar.errors import NemarError as NemarError
