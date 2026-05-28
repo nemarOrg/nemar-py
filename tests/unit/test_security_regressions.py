@@ -27,7 +27,7 @@ from nemar._endpoint import DataEndpoint
 from nemar._models import DatasetFile, DatasetIndex, DatasetVersion, VersionManifest
 from nemar._request import TransferOptions
 from nemar._retry import RetryPolicy
-from nemar._transfer import PythonBackend
+from nemar._streaming import PythonBackend
 from nemar._verification import VerifyPolicy
 from nemar.errors import (
     EndpointError,

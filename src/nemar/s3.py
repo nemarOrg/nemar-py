@@ -74,10 +74,10 @@ if TYPE_CHECKING:
     # Type-only imports — used purely for annotations on
     # :meth:`S3Backend.transfer`. Pulling :class:`TransferOptions` at
     # runtime would create a ``_transfer → _s3 → _transfer`` cycle.
-    # :class:`~nemar._transfer.TransferBackend` is a structural Protocol,
+    # :class:`~nemar._backend.TransferBackend` is a structural Protocol,
     # so the runtime never inspects these annotations.
+    from nemar._backend import TransferOptions
     from nemar._retry import RetryPolicy
-    from nemar._transfer import TransferOptions
     from nemar._verification import VerifyPolicy
 
 NEMAR_S3_BUCKET = "nemar"
@@ -264,7 +264,7 @@ class S3Backend:
         """Fetch every entry in ``files`` into ``target_dir`` from S3.
 
         The ``options`` / ``verify`` / ``retry`` policies are accepted
-        to honour the :class:`~nemar._transfer.TransferBackend`
+        to honour the :class:`~nemar._backend.TransferBackend`
         protocol; this backend uses ``options.max_concurrent_downloads``
         for the shared :class:`s3fs.S3FileSystem` and otherwise leaves
         verification / retry to the orchestrator and the layered

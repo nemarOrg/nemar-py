@@ -19,15 +19,12 @@ from pathlib import Path
 
 import httpx
 
+from nemar._backend import TransferOptions
 from nemar._datalad import DataLadBackend
 from nemar._models import DatasetFile
 from nemar._retry import RetryPolicy
-from nemar._transfer import (
-    LayeredBackend,
-    PythonBackend,
-    TransferOptions,
-    select_backend,
-)
+from nemar._streaming import PythonBackend
+from nemar._transfer import LayeredBackend, select_backend
 from nemar._verification import VerifyPolicy
 from nemar.errors import DataLadError, S3Error
 from nemar.s3 import S3Backend

@@ -33,10 +33,11 @@ from pathlib import Path
 import pytest
 
 from nemar import _datalad
+from nemar._backend import TransferOptions
 from nemar._datalad import DataLadBackend, _DataLadModules
 from nemar._models import DatasetFile
 from nemar._retry import RetryPolicy
-from nemar._transfer import LayeredBackend, TransferOptions
+from nemar._transfer import LayeredBackend
 from nemar._verification import VerifyPolicy
 from nemar.errors import DataLadError, TransferError
 

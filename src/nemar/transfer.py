@@ -16,5 +16,5 @@ full index → manifest → BIDS-selection → transfer flow.
 
 from __future__ import annotations
 
+from nemar._streaming import download_one as download_one
 from nemar._transfer import download_files as download_files
-from nemar._transfer import download_one as download_one
