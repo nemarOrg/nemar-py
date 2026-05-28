@@ -574,10 +574,11 @@ def test_download_rejects_non_object_metadata_payload(
         )
 
 
-# Target-directory compatibility checks moved out of ``_download`` into the
-# :class:`nemar._local_dataset.LocalDataset` value type. The exhaustive
-# behavioural coverage lives in ``tests/unit/test_local_dataset.py``; the
-# end-to-end orchestrator wiring is exercised by
+# Target-directory compatibility checks live in the private
+# :func:`nemar._download._check_local_compatibility` function. The
+# exhaustive behavioural coverage lives in
+# ``tests/unit/test_local_dataset.py``; the end-to-end orchestrator
+# wiring is exercised by
 # ``tests/integration/test_filesystem.py::test_existing_wrong_version_blocks_download``.
 
 
