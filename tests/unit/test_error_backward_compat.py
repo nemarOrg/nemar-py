@@ -18,7 +18,7 @@ from nemar._download import LocalDataset
 from nemar._endpoint import DataEndpoint
 from nemar._models import DatasetFile, VersionManifest, parse_dataset_index
 from nemar._retry import RetryPolicy
-from nemar._selection import SelectionPlan
+from nemar._selection import select_files
 from nemar._transport import fetch_json
 from nemar._verification import VerifyPolicy, assert_all_present
 from nemar.errors import (
@@ -87,7 +87,7 @@ def test_dataset_index_resolve_version_runtime_error():
 
 
 def test_selection_zero_match_is_a_runtime_error():
-    """SelectionPlan.build raises a RuntimeError (subclass) on zero match."""
+    """select_files raises a RuntimeError (subclass) on zero match."""
     files = [
         DatasetFile(
             path="sub-001/eeg/sub-001_task-MMN_eeg.set",
@@ -97,7 +97,7 @@ def test_selection_zero_match_is_a_runtime_error():
     with pytest.raises(
         RuntimeError, match="No files matched the BIDS query"
     ) as info:
-        SelectionPlan.build(
+        select_files(
             files,
             query=BidsQuery.from_filters(subject="002"),
             include=[],

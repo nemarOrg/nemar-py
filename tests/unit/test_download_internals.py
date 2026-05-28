@@ -10,7 +10,7 @@ from nemar import _bids, _download, fetch_dataset_index
 from nemar._download import download
 from nemar._models import DatasetFile
 from nemar._request import DownloadRequest
-from nemar._selection import SelectionPlan
+from nemar._selection import raise_if_unmatched_includes, select_files
 from nemar._verification import (
     VerifyPolicy,
     VerifyResult,
@@ -128,15 +128,15 @@ def test_select_bids_files_applies_semantic_and_path_filters(
 ) -> None:
     """BIDS file selection composes semantic filters, globs, and essentials."""
     files = dataset_files(paths)
-    plan = SelectionPlan.build(
+    result = select_files(
         files,
         query=query,
         include=include,
         exclude=exclude,
     )
-    plan.raise_if_unmatched_includes(filenames=[file.path for file in files])
+    raise_if_unmatched_includes(result, filenames=[file.path for file in files])
 
-    assert [file.path for file in plan.final] == expected
+    assert [file.path for file in result.selected] == expected
 
 
 def test_select_bids_files_errors_when_bids_query_has_no_matches() -> None:
@@ -149,7 +149,7 @@ def test_select_bids_files_errors_when_bids_query_has_no_matches() -> None:
     ]
 
     with pytest.raises(RuntimeError, match="No files matched the BIDS query"):
-        SelectionPlan.build(
+        select_files(
             files,
             query=_bids.BidsQuery.from_filters(subject="002"),
             include=[],
@@ -166,7 +166,7 @@ def test_select_bids_files_suggests_close_include() -> None:
             url="https://data.nemar.org/b",
         ),
     ]
-    plan = SelectionPlan.build(
+    result = select_files(
         files,
         query=_bids.BidsQuery(),
         include=["participant.tsv"],
@@ -174,7 +174,7 @@ def test_select_bids_files_suggests_close_include() -> None:
     )
 
     with pytest.raises(RuntimeError, match="Perhaps you mean"):
-        plan.raise_if_unmatched_includes(filenames=[file.path for file in files])
+        raise_if_unmatched_includes(result, filenames=[file.path for file in files])
 
 
 def test_fetch_dataset_index_uses_advertised_versions(monkeypatch) -> None:

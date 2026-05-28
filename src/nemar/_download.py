@@ -6,7 +6,7 @@ download
   NEMARClient.fetch_index
   NEMARClient.fetch_metadata
   NEMARClient.fetch_manifest
-  SelectionPlan.build (inlined in _run)
+  select_files → raise_if_unmatched_includes (inlined in _run)
   LocalDataset.from_dir(...).assert_compatible_with(...)
   detect_case_collisions (inlined in _run)
   select_backend → TransferBackend.transfer  (see :mod:`nemar._transfer`)
@@ -45,7 +45,7 @@ from nemar._request import (
     DownloadRequest,
     _normalize_version_tag,
 )
-from nemar._selection import SelectionPlan
+from nemar._selection import raise_if_unmatched_includes, select_files
 from nemar._transfer import select_backend
 from nemar._verification import (
     assert_all_present,
@@ -295,14 +295,14 @@ def _run(request: DownloadRequest) -> None:
         manifest = client.fetch_manifest(index, version)
 
     files = list(manifest)
-    plan = SelectionPlan.build(
+    result = select_files(
         files,
         query=request.bids_query,
         include=list(request.include_patterns),
         exclude=list(request.exclude_patterns),
     )
-    plan.raise_if_unmatched_includes(filenames=[file.path for file in files])
-    selected_files = list(plan.final)
+    raise_if_unmatched_includes(result, filenames=[file.path for file in files])
+    selected_files = list(result.selected)
     if request.no_data:
         selected_files = [
             file for file in selected_files if file.git_sha1 is not None
