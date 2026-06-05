@@ -193,3 +193,69 @@ class TestPathLookup:
         assert resolved.size == 99
         assert "dataset_description.json" in manifest
         assert "absent.json" not in manifest
+
+
+class TestVersionJsonShape:
+    """The compact ``version/<v>.json`` shape (what ``s3.version_url`` points at).
+
+    Keyed by path; each entry carries a git-annex content ``key``, ``size``,
+    and a combined ``"<algo>:<hex>"`` ``checksum`` — no separate
+    ``checksum_algorithm`` and no ``url``. The parser must recover the hash
+    (from the combined checksum, falling back to the annex key) so this shape
+    verifies on content, not size-only.
+    """
+
+    def test_combined_checksum_populates_sha256(self) -> None:
+        digest = "a" * 64
+        files = _parse_payload(
+            {
+                "sub-01/eeg/sub-01_eeg.set": {
+                    "key": f"SHA256E-s304--{digest}.set",
+                    "size": 304,
+                    "checksum": f"sha256:{digest}",
+                }
+            }
+        )
+        f = files.file("sub-01/eeg/sub-01_eeg.set")
+        assert f.sha256 == digest
+        assert f.md5 is None and f.git_sha1 is None
+        assert f.size == 304
+
+    def test_combined_checksum_md5(self) -> None:
+        digest = "b" * 32
+        files = _parse_payload(
+            {
+                "x.bdf": {
+                    "key": f"MD5E-s10--{digest}.bdf",
+                    "size": 10,
+                    "checksum": f"md5:{digest}",
+                }
+            }
+        )
+        assert files.file("x.bdf").md5 == digest
+
+    def test_annex_key_recovers_hash_without_combined_checksum(self) -> None:
+        digest = "c" * 64
+        files = _parse_payload(
+            {"y.set": {"key": f"SHA256E-s5--{digest}.set", "size": 5}}
+        )
+        assert files.file("y.set").sha256 == digest
+
+    def test_unsupported_combined_algorithm_raises(self) -> None:
+        with pytest.raises(RuntimeError, match="Unsupported checksum algorithm"):
+            _parse_payload(
+                {"z.set": {"key": "k", "size": 1, "checksum": "sha512:" + "d" * 128}}
+            )
+
+    def test_bytes_url_key_is_honored(self) -> None:
+        files = _parse_payload(
+            [
+                {
+                    "path": "z.txt",
+                    "bytes_url": "https://nemar.s3.us-east-2.amazonaws.com/z.txt",
+                }
+            ]
+        )
+        assert files.file("z.txt").url == (
+            "https://nemar.s3.us-east-2.amazonaws.com/z.txt"
+        )

@@ -141,3 +141,29 @@ def test_policy_is_frozen() -> None:
 
     with pytest.raises((AttributeError, TypeError)):
         policy.max_attempts = 99  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        pytest.param("30", 30.0, id="integer-seconds"),
+        pytest.param("0", 0.0, id="zero"),
+        pytest.param("99999", 120.0, id="capped-at-max"),
+        pytest.param("  12  ", 12.0, id="whitespace-trimmed"),
+        pytest.param("not-a-date", None, id="unparseable"),
+        pytest.param("", None, id="empty"),
+        pytest.param(None, None, id="absent"),
+    ],
+)
+def test_parse_retry_after(header, expected) -> None:
+    """``parse_retry_after`` handles integer seconds, caps, and junk."""
+    from nemar._retry import parse_retry_after
+
+    assert parse_retry_after(header) == expected
+
+
+def test_parse_retry_after_http_date_in_the_past_is_zero() -> None:
+    """An HTTP-date already in the past yields a zero (immediate) delay."""
+    from nemar._retry import parse_retry_after
+
+    assert parse_retry_after("Wed, 21 Oct 1990 07:28:00 GMT") == 0.0

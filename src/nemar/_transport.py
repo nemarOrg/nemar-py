@@ -29,7 +29,7 @@ import httpx
 from tqdm.auto import tqdm
 
 from nemar._endpoint import DataEndpoint
-from nemar._retry import RetryPolicy, _RetryableError
+from nemar._retry import RetryPolicy, _RetryableError, parse_retry_after
 from nemar.errors import TransportError
 
 
@@ -70,9 +70,13 @@ def fetch_json(
     """
     last_attempt = policy.max_attempts - 1
     for attempt in range(policy.max_attempts):
+        retry_after: float | None = None
         try:
             response = client.get(url)
             if policy.should_retry_status(response.status_code):
+                # Honour a server-advised Retry-After (common on 429/503
+                # rate limiting) in preference to the computed backoff.
+                retry_after = parse_retry_after(response.headers.get("retry-after"))
                 raise _RetryableError(f"HTTP {response.status_code}")
             if response.is_error:
                 detail = _response_detail(response)
@@ -101,7 +105,8 @@ def fetch_json(
 
         remaining = last_attempt - attempt
         tqdm.write(f"Retrying after failure when {what} ({remaining} retries remain).")
-        time.sleep(policy.next_delay(attempt))
+        delay = retry_after if retry_after is not None else policy.next_delay(attempt)
+        time.sleep(delay)
 
     raise TransportError(f"Unexpected retry exhaustion when {what}.")
 

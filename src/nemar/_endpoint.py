@@ -1,18 +1,28 @@
 """Value type for the NEMAR HTTPS data endpoint.
 
-The "scoped to ``data.nemar.org``" invariant is real architectural depth in
-this client: dataset-index, metadata, and version-manifest URLs all resolve
-against the configured data origin, and per-file URLs are refused outside it.
-``DataEndpoint`` centralizes that invariant so it lives in one place instead
-of being repeated as ad-hoc HTTPS-prefix checks and ``urlparse`` comparisons
-across the parser and the downloader.
+The same-origin invariant this enforces is **control-plane only**:
+dataset-index, metadata, and version-manifest JSON are fetched from the
+configured data origin, and :func:`nemar._transport.fetch_json` calls
+:meth:`assert_within` on the *final* URL so a redirect cannot silently move
+a JSON fetch to another host.
+
+It is intentionally **not** applied to file-byte URLs. Real NEMAR manifests
+advertise off-origin byte sources by design — ``nemar.s3.us-east-2.amazonaws.com``
+for annexed content and ``raw.githubusercontent.com`` for git-tracked
+sidecars — so a per-file origin check would reject the normal download. The
+trust model is: the control plane is origin-scoped, and file URLs are taken
+from the manifest payload that the (origin-scoped) control plane returned.
+The public :func:`nemar.transfer.download_one` / ``download_files`` primitives
+accept an optional ``endpoint`` for callers that want to opt into per-file
+scoping against hand-built inputs; the default ``download()`` flow does not.
 
 Public surface (kept small on purpose):
 
 - :meth:`DataEndpoint.from_url` parses, validates HTTPS, and normalizes the
   trailing slash.
-- :meth:`DataEndpoint.assert_within` raises ``RuntimeError`` when a URL does
-  not share the endpoint's scheme + netloc (including after a redirect).
+- :meth:`DataEndpoint.assert_within` raises :class:`~nemar.errors.EndpointError`
+  when a URL does not share the endpoint's scheme + netloc (used on the JSON
+  control plane's post-redirect URL).
 - :meth:`DataEndpoint.url_for` is an :func:`urllib.parse.urljoin` shim
   against the normalized endpoint URL.
 """
@@ -30,8 +40,8 @@ class DataEndpoint:
     """The configured NEMAR data origin.
 
     ``url`` is normalized to a single trailing slash. ``scheme`` and ``netloc``
-    are cached at construction so origin checks stay cheap on the hot path
-    (per-file manifest validation).
+    are cached at construction so the control-plane redirect-origin check
+    (:meth:`assert_within`, run once per JSON fetch) stays cheap.
     """
 
     url: str

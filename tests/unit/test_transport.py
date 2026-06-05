@@ -394,3 +394,29 @@ def test_response_detail_formats_endpoint_errors(response, expected) -> None:
 def test_retry_fresh_error_is_subclass_of_retryable_error() -> None:
     """``_RetryFreshError`` is a ``_RetryableError`` so existing handlers match."""
     assert issubclass(_RetryFreshError, _RetryableError)
+
+
+def test_fetch_json_honors_retry_after_header() -> None:
+    """A 503/429 with ``Retry-After`` sleeps the advised delay, not the backoff."""
+    call_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return httpx.Response(503, headers={"Retry-After": "7"}, request=request)
+        return httpx.Response(200, json={"ok": True}, request=request)
+
+    transport = httpx.MockTransport(handler)
+    sleep = MagicMock()
+    with mock.patch("nemar._transport.time.sleep", sleep):
+        with httpx.Client(transport=transport) as client:
+            result = fetch_json(
+                client,
+                url="https://data.nemar.org/x",
+                what="testing",
+                policy=_two_shot_policy(),
+            )
+
+    assert result == {"ok": True}
+    assert call_count["n"] == 2
+    sleep.assert_called_once_with(7.0)

@@ -401,3 +401,22 @@ def test_coerce_hash_strips_etag_weak_prefix(raw, expected) -> None:
         }
     ]
     assert parse_manifest(payload)[0].sha256 == expected
+
+
+def test_dataset_index_latest_accepts_null() -> None:
+    """An exists-but-unpublished dataset returns 200 with ``latest: null``."""
+    index = parse_dataset_index(
+        {"dataset_id": "nm000001", "latest": None, "versions": []}
+    )
+    assert index.latest is None
+
+
+def test_resolve_version_on_unpublished_dataset_raises_clear_error() -> None:
+    """Resolving ``latest`` when ``latest=null`` explains the dataset is unpublished."""
+    index = parse_dataset_index(
+        {"dataset_id": "nm000001", "latest": None, "versions": []}
+    )
+    with pytest.raises(RuntimeError, match="no published version yet"):
+        index.resolve_version("latest")
+    with pytest.raises(RuntimeError, match="no published version yet"):
+        index.resolve_version(None)

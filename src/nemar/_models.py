@@ -32,14 +32,25 @@ class DatasetIndex(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     dataset_id: str
-    latest: str
+    # ``None`` when the dataset exists but has no published version yet —
+    # the NEMAR index returns ``200`` with ``latest: null`` in that case.
+    latest: str | None = None
     metadata_url: str | None = None
     datalad_url: str | None = None
     versions: list[DatasetVersion] = Field(default_factory=list)
 
     def resolve_version(self, tag: str | None = None) -> DatasetVersion:
         """Resolve ``None``, ``latest``, or an explicit advertised version."""
-        requested = self.latest if tag in (None, "latest") else tag
+        if tag in (None, "latest"):
+            if self.latest is None:
+                raise DatasetIndexError(
+                    f"{self.dataset_id} exists but has no published version yet "
+                    "(the NEMAR index returned latest=null). Request a specific "
+                    "version tag once one is published."
+                )
+            requested: str = self.latest
+        else:
+            requested = tag
         for version in self.versions:
             if version.version == requested:
                 return version
@@ -260,7 +271,9 @@ def _entry_to_file(
             "relativePath",
             "key",
         )
-        raw_url = _first_value(entry, "url", "download_url", "downloadUrl", "href")
+        raw_url = _first_value(
+            entry, "url", "bytes_url", "download_url", "downloadUrl", "href"
+        )
         if raw_url is None and isinstance(entry.get("urls"), list) and entry["urls"]:
             raw_url = entry["urls"][0]
         size = _coerce_size(_first_value(entry, "size", "bytes", "size_bytes"))
@@ -291,6 +304,19 @@ def _entry_to_file(
             md5 = _coerce_hash(_first_value(entry, "md5", "md5sum", "etag"))
         if git_sha1 is None:
             git_sha1 = _coerce_hash(_first_value(entry, "git_sha1"))
+        # ``version/<v>.json`` shape (what ``s3.version_url`` points at):
+        # a combined ``"<algo>:<hex>"`` checksum string (no separate
+        # ``checksum_algorithm`` field) and a git-annex content ``key``
+        # from which the algorithm + digest are recoverable. Without this
+        # recovery the shape parses to size-only verification.
+        if sha256 is None and md5 is None and git_sha1 is None:
+            sha256, md5, git_sha1 = _hashes_from_combined_checksum(
+                entry.get("checksum")
+            )
+        if sha256 is None and md5 is None and git_sha1 is None:
+            sha256, md5 = _hashes_from_annex_key(
+                _first_value(entry, "key", "annex_key")
+            )
     else:
         raise ManifestError(f"Unsupported manifest entry type: {type(entry).__name__}")
 
@@ -387,3 +413,54 @@ def _coerce_hash(value: Any) -> str | None:
     if value.startswith("W/"):
         value = value[2:]
     return value or None
+
+
+def _hashes_from_combined_checksum(
+    value: Any,
+) -> tuple[str | None, str | None, str | None]:
+    """Split a combined ``"<algo>:<hex>"`` checksum into (sha256, md5, git_sha1).
+
+    The ``version/<v>.json`` manifest carries the digest as one
+    ``checksum: "sha256:<hex>"`` field rather than the separate
+    ``checksum_algorithm`` + ``checksum`` pair the production
+    ``manifest.json`` uses. Returns all-``None`` when ``value`` is not a
+    ``<algo>:<hex>`` string (e.g. a bare hex with no algorithm) so the
+    caller does not have to guess which field a naked digest belongs to.
+    """
+    if not isinstance(value, str) or ":" not in value:
+        return None, None, None
+    algo, _, hex_part = value.partition(":")
+    coerced = _coerce_hash(hex_part)
+    if coerced is None:
+        return None, None, None
+    algo = algo.strip().lower()
+    if algo == "sha256":
+        return coerced, None, None
+    if algo == "md5":
+        return None, coerced, None
+    if algo in ("git", "sha1"):
+        return None, None, coerced
+    raise ManifestError(f"Unsupported checksum algorithm in {value!r}.")
+
+
+def _hashes_from_annex_key(value: Any) -> tuple[str | None, str | None]:
+    """Recover ``(sha256, md5)`` from a git-annex content key.
+
+    Annex extension-backend keys look like
+    ``SHA256E-s<size>--<hex>.<ext>`` / ``MD5E-s<size>--<hex>.<ext>``: the
+    backend prefix names the algorithm and the hex between ``--`` and the
+    extension is the digest. Returns ``(None, None)`` for non-E backends
+    or a malformed key — the caller then keeps size-only verification.
+    """
+    if not isinstance(value, str) or "--" not in value:
+        return None, None
+    backend = value.split("-", 1)[0].upper()
+    key_data = value.split("--", 1)[1]
+    coerced = _coerce_hash(key_data.split(".", 1)[0])
+    if coerced is None:
+        return None, None
+    if backend.startswith("SHA256"):
+        return coerced, None
+    if backend.startswith("MD5"):
+        return None, coerced
+    return None, None

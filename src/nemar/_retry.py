@@ -11,8 +11,43 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 import httpx
+
+# Cap on a server-advised ``Retry-After`` so a hostile or misconfigured
+# origin cannot stall the client for an unbounded time.
+_MAX_RETRY_AFTER = 120.0
+
+
+def parse_retry_after(value: str | None) -> float | None:
+    """Parse an HTTP ``Retry-After`` header into a delay in seconds.
+
+    Honours both forms RFC 9110 allows — a delay in integer seconds
+    (``Retry-After: 30``) and an HTTP-date (``Retry-After: Wed, 21 Oct
+    2026 07:28:00 GMT``). Returns ``None`` when the header is absent or
+    unparseable (the caller then falls back to its computed backoff). The
+    result is clamped to ``[0, _MAX_RETRY_AFTER]`` so a bad value cannot
+    hang the client.
+    """
+    if not value:
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return min(float(value), _MAX_RETRY_AFTER)
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    delta = (when - datetime.now(timezone.utc)).total_seconds()
+    if delta <= 0:
+        return 0.0
+    return min(delta, _MAX_RETRY_AFTER)
 
 _DEFAULT_RETRYABLE_STATUS: frozenset[int] = frozenset(
     {408, 429, 500, 502, 503, 504, 522, 524}
