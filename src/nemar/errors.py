@@ -65,7 +65,7 @@ class DataLadError(TransferError):
 class S3Error(TransferError):
     """Direct-from-S3 transfer failure.
 
-    Raised by :class:`~nemar.s3.S3Backend` when ``s3fs`` cannot resolve
+    Raised by :class:`~nemar.s3.S3Backend` when ``boto3`` cannot resolve
     or fetch an object (missing key, unauthenticated, network error,
     non-annexed manifest entry, …). Subclasses :class:`TransferError`
     so callers who catch ``TransferError`` still see the diagnostic;

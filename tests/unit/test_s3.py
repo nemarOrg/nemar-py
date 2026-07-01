@@ -19,7 +19,6 @@ import json
 import socket
 
 import pytest
-import s3fs
 
 from nemar._backend import TransferOptions
 from nemar._models import DatasetFile
@@ -38,10 +37,11 @@ from nemar.s3 import (
     version_url,
 )
 
-# ``moto`` and ``boto3`` are dev-only deps used by the in-memory S3
-# server. CI's minimal install does not pull them, so guard the import
-# and skip the S3Backend-transfer tests when missing. ``annex_key_for``
-# and the URL-helper tests above need neither — they keep running.
+# ``moto`` is a dev-only dep used by the in-memory S3 server (``boto3``
+# is now a runtime dep). CI's minimal install does not pull moto, so
+# guard the import and skip the S3Backend-transfer tests when missing.
+# ``annex_key_for`` and the URL-helper tests above need neither — they
+# keep running.
 try:
     import boto3
     from moto.server import ThreadedMotoServer
@@ -221,18 +221,14 @@ def _free_port() -> int:
 def moto_s3(monkeypatch):
     """Stand up an in-memory S3 service via ``moto.server.ThreadedMotoServer``.
 
-    ``s3fs`` talks HTTP to a real-shaped S3 endpoint; ``moto``'s
-    in-process ``mock_aws`` decorator does not catch the underlying
-    ``aiobotocore`` traffic. The threaded server does. We point both
-    ``boto3`` (for object publishing in test setup) and the production
-    ``s3fs`` (for the backend under test) at the same URL via the
-    standard ``AWS_ENDPOINT_URL_S3`` env var that ``aiobotocore``
+    The production backend talks HTTP to a real-shaped S3 endpoint;
+    ``moto``'s in-process ``mock_aws`` decorator does not catch that
+    traffic reliably, but the threaded server does. We point both the
+    test-setup ``boto3`` client (for publishing objects) and the
+    production ``boto3`` client (the backend under test) at the same URL
+    via the standard ``AWS_ENDPOINT_URL_S3`` env var that ``botocore``
     respects natively.
     """
-    # ``s3fs`` keeps a class-level filesystem cache; clear it so a
-    # previously-cached anonymous fs (pointing at a closed moto port)
-    # does not hijack this test's traffic.
-    s3fs.S3FileSystem.clear_instance_cache()
     port = _free_port()
     server = ThreadedMotoServer(port=port)
     server.start()

@@ -8,13 +8,13 @@ from pathlib import Path
 
 import httpx
 import pytest
-import s3fs
 from tqdm.auto import tqdm
 
-# ``moto`` / ``boto3`` are dev-only deps for the in-memory S3 server
-# used by the chain integration tests. CI's minimal install does not
-# pull them, so guard and skip the chain tests when missing. The rest
-# of this module (HTTPS streaming tests) does not need either.
+# ``moto`` is a dev-only dep for the in-memory S3 server used by the
+# chain integration tests (``boto3`` is now a runtime dep). CI's minimal
+# install does not pull moto, so guard and skip the chain tests when
+# missing. The rest of this module (HTTPS streaming tests) does not need
+# either.
 try:
     import boto3
     from moto.server import ThreadedMotoServer
@@ -418,7 +418,6 @@ def _free_port_for_chain() -> int:
 @pytest.fixture
 def moto_s3_chain(monkeypatch):
     """Mirror of the unit-test moto fixture, for end-to-end chain tests."""
-    s3fs.S3FileSystem.clear_instance_cache()
     port = _free_port_for_chain()
     server = ThreadedMotoServer(port=port)
     server.start()
