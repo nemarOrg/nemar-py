@@ -63,7 +63,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 
-import s3fs
+import boto3
+from botocore import UNSIGNED
+from botocore.config import Config
 from tqdm.auto import tqdm
 
 from nemar._backend import TransferOptions
@@ -219,10 +221,15 @@ class S3Backend:
     """Adapter that fetches files directly from the public NEMAR S3 bucket.
 
     Anonymous public-read against ``nemar.s3.us-east-2.amazonaws.com``
-    via ``s3fs``. The pattern matches ``eegdash``'s downloader (which
-    has been running this in production for years against the same
-    bucket) — one shared :class:`s3fs.S3FileSystem` per batch, anonymous
-    auth, content-addressed at ``<dataset>/objects/<annex-key>``.
+    via a synchronous ``boto3`` client (unsigned). The pattern matches
+    ``eegdash``'s downloader (which has been running this in production
+    for years against the same bucket) — one shared client per batch,
+    anonymous auth, content-addressed at ``<dataset>/objects/<annex-key>``.
+
+    ``boto3`` (not ``s3fs``) on purpose: ``s3fs`` drags in
+    ``aiobotocore``, which hard-pins ``botocore`` and makes any
+    environment that also needs ``boto3`` unsolvable. See
+    https://github.com/eegdash/EEGDash/issues/397.
 
     Failure-mode contract: the **first** S3 miss aborts the whole
     batch's S3 transfer with :class:`~nemar.errors.S3Error`. The
@@ -258,23 +265,28 @@ class S3Backend:
         The ``options`` / ``verify`` / ``retry`` policies are accepted
         to honour the :class:`~nemar._backend.TransferBackend`
         protocol; this backend uses ``options.max_concurrent_downloads``
-        for the shared :class:`s3fs.S3FileSystem` and otherwise leaves
-        verification / retry to the orchestrator and the layered
-        wrapper. The HTTPS fallback exercises both policies fully.
+        to size the shared ``boto3`` client's connection pool and
+        otherwise leaves verification / retry to the orchestrator and
+        the layered wrapper. The HTTPS fallback exercises both policies
+        fully.
         """
         del verify, retry  # See docstring — split owned by orchestrator.
         max_concurrency = min(
             self.max_concurrency, max(1, options.max_concurrent_downloads)
         )
         try:
-            fs = s3fs.S3FileSystem(
-                anon=True,
-                max_concurrency=max_concurrency,
-                client_kwargs={"region_name": NEMAR_S3_REGION},
+            client = boto3.client(
+                "s3",
+                region_name=NEMAR_S3_REGION,
+                config=Config(
+                    signature_version=UNSIGNED,
+                    max_pool_connections=max_concurrency,
+                    retries={"max_attempts": 5, "mode": "standard"},
+                ),
             )
         except Exception as exc:  # pragma: no cover — defensive
             raise S3Error(
-                f"failed to construct anonymous S3 filesystem: {exc}"
+                f"failed to construct anonymous S3 client: {exc}"
             ) from exc
 
         total = sum(file.size or 0 for file in files)
@@ -293,14 +305,28 @@ class S3Backend:
                         "(no sha256/md5 checksum on the manifest entry); "
                         "the S3 backend has nothing to fetch."
                     )
-                s3_path = f"{NEMAR_S3_BUCKET}/{self.dataset}/objects/{key}"
+                object_key = f"{self.dataset}/objects/{key}"
+                s3_path = f"{NEMAR_S3_BUCKET}/{object_key}"
                 local_path = target_dir / file.path
                 local_path.parent.mkdir(parents=True, exist_ok=True)
                 try:
-                    fs.get(s3_path, str(local_path))
+                    # A single unsigned GetObject — no HeadObject, no
+                    # ListObjects — which is all this public-read,
+                    # private-list bucket grants anonymously. Stream to
+                    # disk so large objects never sit fully in memory, and
+                    # advance the bar per chunk so multi-GB fetches don't
+                    # look stalled between files.
+                    resp = client.get_object(
+                        Bucket=NEMAR_S3_BUCKET, Key=object_key
+                    )
+                    with open(local_path, "wb") as fh:
+                        for chunk in resp["Body"].iter_chunks(
+                            chunk_size=1024 * 1024
+                        ):
+                            fh.write(chunk)
+                            progress.update(len(chunk))
                 except Exception as exc:
                     raise S3Error(
                         f"S3 fetch failed for {file.path!r} "
                         f"(s3://{s3_path}): {exc}"
                     ) from exc
-                progress.update(file.size or 0)
