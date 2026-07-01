@@ -7,4 +7,4 @@ setuptools' build-time ``attr`` reader — reads the same literal without
 a package-initialization back-edge. Bump this one line per release.
 """
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
