@@ -32,12 +32,18 @@ def run_batch(
     workers: int,
     error_cls: type[Exception],
     label: str,
+    fail_fast: bool = False,
 ) -> None:
     """Apply ``worker`` to every item, raising ``error_cls`` if any failed.
 
-    Every item is attempted even when an earlier one fails: a partially
-    transferred batch is still progress, and the caller learns about all of the
-    failures at once rather than one re-run at a time.
+    By default every item is attempted even when an earlier one fails: a
+    partially transferred batch is still progress, and the caller learns about
+    all of the failures at once rather than one re-run at a time.
+
+    ``fail_fast`` inverts that for callers whose batch is all-or-nothing. There,
+    finishing the batch after a failure is pure waste -- the work is discarded
+    and redone by whatever handles the failure -- so pending items are cancelled
+    as soon as one raises.
 
     Raises
     ------
@@ -47,13 +53,18 @@ def run_batch(
         traceback survives.
 
     """
+    errors: list[BaseException] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(worker, item) for item in items]
-        errors = [
-            exc
-            for future in concurrent.futures.as_completed(futures)
-            if (exc := future.exception()) is not None
-        ]
+        for future in concurrent.futures.as_completed(futures):
+            exc = future.exception()
+            if exc is None:
+                continue
+            errors.append(exc)
+            if fail_fast:
+                for pending in futures:
+                    pending.cancel()
+                break
     if not errors:
         return
     head = "; ".join(str(exc) for exc in errors[:_QUOTED_ERRORS])

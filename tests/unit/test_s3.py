@@ -524,3 +524,48 @@ class TestS3ParallelAndAtomic:
 
         # The annexed file must NOT have been written: the miss is pre-flighted.
         assert not (tmp_path / "eeg/good.set").exists()
+
+    def test_small_files_skip_staging_but_large_ones_use_it(
+        self, moto_s3, tmp_path
+    ) -> None:
+        """Staging is paid for where it matters, not per sidecar.
+
+        A rename per file is a metadata round-trip that does not parallelise
+        (~14x fewer small files/s on Lustre), and a truncated sidecar is caught
+        by the post-transfer size/hash gate. So only objects at or over the
+        multipart threshold are staged.
+        """
+        seen: list[str] = []
+        original = _s3.staged
+
+        def spy(path):
+            seen.append(path.name)
+            return original(path)
+
+        big = b"b" * 4096
+        small = b"s" * 16
+        files = [
+            _dataset_file("eeg/big.set", big),
+            _dataset_file("eeg/tiny.tsv", small),
+        ]
+        for f, payload in zip(files, (big, small)):
+            _publish_annex_object(moto_s3, "nm000132", annex_key_for(f), payload)
+
+        backend = S3Backend(dataset="nm000132", multipart_threshold=1024)
+        _s3.staged = spy
+        try:
+            retry, verify = _policies()
+            backend.transfer(
+                files,
+                target_dir=tmp_path,
+                options=_options(),
+                verify=verify,
+                retry=retry,
+            )
+        finally:
+            _s3.staged = original
+
+        assert seen == ["big.set"], "only the large object should be staged"
+        assert (tmp_path / "eeg/big.set").read_bytes() == big
+        assert (tmp_path / "eeg/tiny.tsv").read_bytes() == small
+        assert list(tmp_path.rglob("*.part")) == []

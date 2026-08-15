@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from nemar._constants import PARTIAL_SUFFIX
-from nemar._staging import _commit, staged, staging_path
+from nemar._staging import _commit, direct, staged, staging_path
 
 
 def test_staging_path_appends_the_partial_suffix(tmp_path: Path) -> None:
@@ -138,3 +138,24 @@ def test_commit_fsyncs_before_renaming(tmp_path: Path, monkeypatch) -> None:
     _commit(staging, final)
 
     assert order == ["fsync", "replace"]
+
+
+def test_direct_yields_the_final_path_itself(tmp_path: Path) -> None:
+    """The no-staging counterpart writes where the caller asked, no rename."""
+    final = tmp_path / "sub-01" / "small.tsv"
+
+    with direct(final) as destination:
+        assert destination == final
+        destination.write_bytes(b"data")
+
+    assert final.read_bytes() == b"data"
+    assert list(tmp_path.rglob(f"*{PARTIAL_SUFFIX}")) == []
+
+
+def test_direct_creates_parent_directories(tmp_path: Path) -> None:
+    final = tmp_path / "deep" / "nested" / "small.tsv"
+
+    with direct(final) as destination:
+        destination.write_bytes(b"x")
+
+    assert final.exists()

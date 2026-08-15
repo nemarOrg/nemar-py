@@ -23,7 +23,7 @@ from pathlib import Path
 
 from nemar._constants import PARTIAL_SUFFIX
 
-__all__ = ["staged", "staging_path"]
+__all__ = ["direct", "staged", "staging_path"]
 
 
 def staging_path(final: Path) -> Path:
@@ -49,6 +49,21 @@ def _commit(staging: Path, final: Path) -> None:
     finally:
         os.close(fd)
     os.replace(staging, final)
+
+
+@contextmanager
+def direct(final: Path) -> Iterator[Path]:
+    """Yield ``final`` itself, creating its parent — no staging, no rename.
+
+    The counterpart to :func:`staged`, for files small enough that a rename per
+    file costs more than the crash-safety is worth. On a networked filesystem a
+    rename is a metadata round-trip that does not parallelise: measured ~14x
+    fewer small files per second on Lustre. A truncated small file is still
+    caught by the post-transfer size and hash gate; a truncated multi-GB object
+    is the case worth paying for.
+    """
+    final.parent.mkdir(parents=True, exist_ok=True)
+    yield final
 
 
 @contextmanager

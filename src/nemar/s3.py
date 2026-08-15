@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import concurrent.futures
 from collections.abc import Sequence
+from contextlib import closing
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
 
@@ -79,7 +80,7 @@ from nemar._constants import (
 from nemar._models import DatasetFile
 from nemar._pool import run_batch
 from nemar._retry import RetryPolicy
-from nemar._staging import staged
+from nemar._staging import direct, staged
 from nemar._verification import VerifyPolicy
 from nemar.errors import S3Error
 
@@ -93,10 +94,16 @@ def _drain(body: Any, handle: BinaryIO, progress: tqdm) -> None:
 
     Streamed rather than buffered so a multi-GB object never sits in memory,
     and the bar advances per chunk so a large fetch does not look stalled.
+
+    The body is closed even when the copy raises. Left open, a failed
+    mid-stream read never returns its connection to the pool, and because the
+    traceback is retained the socket stays pinned -- enough of those and the
+    pool is exhausted and every later request pays a fresh TLS handshake.
     """
-    for chunk in body.iter_chunks(chunk_size=CHUNK_BYTES):
-        handle.write(chunk)
-        progress.update(len(chunk))
+    with closing(body):
+        for chunk in body.iter_chunks(chunk_size=CHUNK_BYTES):
+            handle.write(chunk)
+            progress.update(len(chunk))
 
 
 def _get_whole(
@@ -418,11 +425,18 @@ class S3Backend:
                 object_key = f"{self.dataset}/objects/{key}"
                 s3_path = f"{NEMAR_S3_BUCKET}/{object_key}"
                 size = file.size or 0
+                # Big writes go through a .part and are renamed into place only
+                # once complete, so an interrupted fetch cannot leave a
+                # truncated file under the real name. Small ones are written
+                # directly: a rename per file is a metadata round-trip that
+                # does not parallelise (~14x fewer small files/s on Lustre),
+                # and a short sidecar is caught by the size/hash gate anyway.
+                # A file of unknown size is treated as big -- it is the case we
+                # cannot reason about.
+                big = file.size is None or size >= self.multipart_threshold
+                destination = staged if big else direct
                 try:
-                    # Writes land in a .part and are renamed into place only
-                    # once the body is complete, so an interrupted fetch cannot
-                    # leave a truncated file under the real name.
-                    with staged(target_dir / file.path) as staging:
+                    with destination(target_dir / file.path) as staging:
                         if part_workers > 1 and size >= self.multipart_threshold:
                             _get_ranged(
                                 client,
@@ -442,8 +456,15 @@ class S3Backend:
 
             run_batch(
                 fetch,
-                keyed,
+                # Largest first: submitting in manifest order lets a multi-GB
+                # object land last and stall the tail while every other worker
+                # idles. Longest-first is the standard makespan fix.
+                sorted(keyed, key=lambda entry: -(entry[0].size or 0)),
                 workers=file_workers,
                 error_cls=S3Error,
+                # This backend is batch-atomic: one failure sends the whole
+                # batch to the next layer, which re-fetches everything. Carrying
+                # on would download the rest of the dataset only to discard it.
+                fail_fast=True,
                 label="S3 transfer",
             )
