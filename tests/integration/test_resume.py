@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
+from tqdm.auto import tqdm
 
 import nemar
+from nemar import _streaming
+from nemar._models import DatasetFile
 from tests.fixtures.factories import (
     make_blob,
     make_index,
@@ -47,3 +52,41 @@ def test_resume_from_partial_file_uses_range_header(nemar_endpoint, target_dir):
     )
 
     assert partial.read_bytes() == blob.content
+
+
+@pytest.mark.parametrize(
+    ("legacy_bytes", "description"),
+    [
+        pytest.param(b"old partial", "a short file from an older version", id="short"),
+        pytest.param(b"", "an empty file", id="empty"),
+    ],
+)
+def test_legacy_partial_at_the_final_path_is_overwritten(
+    tmp_path, httpserver, legacy_bytes, description
+):
+    """A partial left at the final path by an older version must not corrupt.
+
+    Before staging, an interrupted transfer left its bytes under the real name.
+    Those files are still on disk after an upgrade. They are not resumed from
+    (the Range request reads the .part), so the transfer must simply replace
+    them rather than append to them and produce a corrupt result.
+    """
+    data = b"complete and correct payload"
+    httpserver.expect_request("/data/sample.bin").respond_with_data(data)
+    out = tmp_path / "data" / "sample.bin"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(legacy_bytes)
+
+    file = DatasetFile(
+        path="data/sample.bin",
+        url=httpserver.url_for("/data/sample.bin"),
+        size=len(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+    with tqdm(total=len(data), desc="test", unit="B") as progress:
+        _streaming._transfer_one_attempt(
+            file, outfile=out, progress=progress, stream_timeout=60.0
+        )
+
+    assert out.read_bytes() == data, description
+    assert list(tmp_path.rglob("*.part")) == []

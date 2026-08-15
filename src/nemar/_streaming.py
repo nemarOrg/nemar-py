@@ -34,6 +34,7 @@ from nemar._endpoint import DataEndpoint
 from nemar._models import DatasetFile
 from nemar._pool import run_batch
 from nemar._retry import RetryPolicy, _RetryableError, _RetryFreshError
+from nemar._staging import commit, staging_path
 from nemar._verification import (
     VerifyPolicy,
     VerifyResult,
@@ -364,13 +365,18 @@ def _transfer_one_attempt(
     # or live — HTTPS authority is the manifest, not the symlink target.
     if outfile.is_symlink():
         outfile.unlink()
+    # Bytes land in <path>.part and are renamed onto <path> only once the body
+    # is complete, so an interrupted transfer cannot leave a truncated file
+    # under the real name. Unlike the S3 backend the partial is KEPT on
+    # failure: it is exactly what the Range request below resumes from.
+    staging = staging_path(outfile)
     # ``force_fresh`` discards any local partial bytes before sending
     # an unconditional GET. Used when the previous attempt got a 416 and
     # the local partial cannot represent a valid suffix of the current
     # object.
-    if force_fresh and outfile.exists():
-        outfile.unlink()
-    local_size = outfile.stat().st_size if outfile.exists() else 0
+    if force_fresh:
+        staging.unlink(missing_ok=True)
+    local_size = staging.stat().st_size if staging.exists() else 0
     if not force_fresh and file.size is not None and 0 < local_size < file.size:
         request_headers["Range"] = f"bytes={local_size}-"
         # Disable compression only on Range requests. Range + gzip is
@@ -382,9 +388,9 @@ def _transfer_one_attempt(
         mode = "ab"
         progress.update(local_size)
     elif file.size is not None and local_size > file.size:
-        outfile.unlink()
-    elif file.size is None and outfile.exists():
-        outfile.unlink()
+        staging.unlink()
+    elif file.size is None and staging.exists():
+        staging.unlink()
 
     # Prefer the shared client when one was passed in. The
     # module-level ``httpx.stream`` fallback exists for callers that
@@ -406,8 +412,7 @@ def _transfer_one_attempt(
         # with ``force_fresh=True`` (one-shot, not infinite).
         if mode == "ab" and response.status_code == 416:
             progress.update(-local_size)
-            if outfile.exists():
-                outfile.unlink()
+            staging.unlink(missing_ok=True)
             raise _RetryFreshError(
                 "HTTP 416 -- resetting partial download for a fresh GET"
             )
@@ -425,10 +430,13 @@ def _transfer_one_attempt(
             progress.update(-local_size)
             mode = "wb"
 
-        with outfile.open(mode) as handle:
+        with staging.open(mode) as handle:
             previous = response.num_bytes_downloaded
             for chunk in response.iter_bytes():
                 handle.write(chunk)
                 current = response.num_bytes_downloaded
                 progress.update(current - previous)
                 previous = current
+    # Only once the body is fully drained. A failure above leaves the .part in
+    # place for the next attempt's Range request.
+    commit(staging, outfile)

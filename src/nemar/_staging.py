@@ -12,6 +12,19 @@ Staging removes the ambiguity structurally. Bytes land in ``<path>.part``;
 :func:`commit` fsyncs and then :func:`os.replace` moves it into place, which is
 atomic within a filesystem. A crash therefore leaves either the previous file
 or a ``.part`` file, never a half-written final one.
+
+Two disciplines, because the backends differ on what a leftover partial is
+worth:
+
+* :func:`staged` — commit on success, **discard** on failure. For a backend
+  that cannot resume (S3 re-fetches from byte 0), a leftover ``.part`` is dead
+  weight the next run overwrites.
+* :func:`staging_path` + :func:`commit` — commit on success, **keep** on
+  failure. The HTTPS backend resumes with a ``Range`` request from exactly
+  those bytes, so throwing them away would discard real progress.
+
+A third, :func:`direct`, skips staging entirely for files small enough that a
+rename per file costs more than the guarantee is worth.
 """
 
 from __future__ import annotations
@@ -23,7 +36,7 @@ from pathlib import Path
 
 from nemar._constants import PARTIAL_SUFFIX
 
-__all__ = ["direct", "staged", "staging_path"]
+__all__ = ["commit", "direct", "staged", "staging_path"]
 
 
 def staging_path(final: Path) -> Path:
@@ -36,7 +49,7 @@ def staging_path(final: Path) -> Path:
     return final.with_name(final.name + PARTIAL_SUFFIX)
 
 
-def _commit(staging: Path, final: Path) -> None:
+def commit(staging: Path, final: Path) -> None:
     """Flush ``staging`` durably and move it onto ``final`` atomically.
 
     The fsync matters as much as the rename: ``os.replace`` orders the
@@ -84,7 +97,7 @@ def staged(final: Path) -> Iterator[Path]:
         # Inside the guard: a failure in the fsync-or-rename step would
         # otherwise orphan the .part, which is the one outcome this module
         # promises cannot happen.
-        _commit(staging, final)
+        commit(staging, final)
     except BaseException:
         staging.unlink(missing_ok=True)
         raise

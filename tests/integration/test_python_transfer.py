@@ -30,6 +30,7 @@ from nemar import _streaming
 from nemar._backend import TransferOptions
 from nemar._models import DatasetFile
 from nemar._retry import RetryPolicy
+from nemar._staging import staging_path
 from nemar._transfer import select_backend
 from nemar._verification import VerifyPolicy
 from tests.fixtures.factories import (
@@ -117,8 +118,11 @@ def test_progress_does_not_overshoot_when_server_ignores_range(
     target.mkdir()
     out = target / "data" / "sample.bin"
     out.parent.mkdir(parents=True, exist_ok=True)
-    # Pre-seed a partial file to trigger the resume / Range branch.
-    out.write_bytes(data[:partial_size])
+    # Pre-seed a partial to trigger the resume / Range branch. It goes at the
+    # STAGING path: the transfer writes to <path>.part and renames onto <path>
+    # only once the body is complete, so a partial never sits under the real
+    # name where something could read it as finished.
+    staging_path(out).write_bytes(data[:partial_size])
 
     file = DatasetFile(
         path="data/sample.bin",
@@ -263,7 +267,7 @@ def test_http_416_on_resume_retries_fresh(tmp_path) -> None:
     target.mkdir()
     out = target / "data" / "sample.bin"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(b"X" * partial_size)  # stale partial
+    staging_path(out).write_bytes(b"X" * partial_size)  # stale partial
 
     file = DatasetFile(
         path="data/sample.bin",

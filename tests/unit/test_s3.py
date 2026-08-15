@@ -402,48 +402,41 @@ class TestS3ParallelAndAtomic:
     ``boto3``'s managed transfer instead silently 403s against production.
     """
 
-    def test_ranged_download_reassembles_exact_bytes(self, moto_s3, tmp_path) -> None:
-        """A multi-part object must land byte-identical, every range in place."""
-        content = bytes(range(256)) * 400  # 102_400 B, non-uniform
-        f = _dataset_file("eeg/big.set", content)
-        _publish_annex_object(moto_s3, "nm000132", annex_key_for(f), content)
-
-        backend = S3Backend(
-            dataset="nm000132", multipart_threshold=1024, multipart_chunksize=8192
-        )
-        retry, verify = _policies()
-        backend.transfer(
-            [f],
-            target_dir=tmp_path,
-            options=_options(max_concurrent_downloads=4),
-            verify=verify,
-            retry=retry,
-        )
-
-        assert (tmp_path / "eeg/big.set").read_bytes() == content
-
-    def test_large_file_still_ranges_in_a_batch_of_many_small_ones(
-        self, moto_s3, tmp_path
+    @pytest.mark.parametrize(
+        ("n_small", "n_large", "concurrency", "expect_ranged"),
+        [
+            pytest.param(0, 1, 4, True, id="one-large-gets-ranged"),
+            pytest.param(12, 0, 8, False, id="all-small-goes-wide"),
+            # The regression that mattered: a batch far larger than the worker
+            # cap still has to range its one big object. Budgeting depth off
+            # len(files) collapsed part_workers to 1 here, so multipart never
+            # ran in the batch shape a multi-GB object actually appears in.
+            pytest.param(20, 1, 8, True, id="large-among-many-small"),
+            # And with more large files than workers, depth clamps to 1 rather
+            # than floor-dividing to 0 (which also starved the connection pool).
+            pytest.param(0, 20, 16, False, id="more-large-than-workers"),
+        ],
+    )
+    def test_batch_lands_byte_exact_across_shapes(
+        self, moto_s3, tmp_path, n_small, n_large, concurrency, expect_ranged
     ) -> None:
-        """Regression: budgeting depth off the batch size killed the ranged path.
+        """Every file lands byte-identical, whatever the batch shape.
 
-        ``part_workers`` was derived from ``len(files)``, so any batch of at
-        least ``max_concurrency`` files collapsed it to 1 and the multipart path
-        never ran -- precisely the batch shape a multi-GB object shows up in.
-        Depth is now budgeted off the count of large files instead.
+        Shape matters because depth and breadth are budgeted against each
+        other: a lone big object wants every worker on its ranges, a pile of
+        sidecars wants breadth, and the mixed case is where that arithmetic has
+        twice been wrong.
         """
-        big = bytes(range(256)) * 400
-        files = [_dataset_file("eeg/big.set", big)]
-        _publish_annex_object(moto_s3, "nm000132", annex_key_for(files[0]), big)
-        for index in range(20):  # > max_concurrent_downloads
-            small = f"small-{index}".encode()
-            f = _dataset_file(f"eeg/small-{index:02d}.tsv", small)
-            _publish_annex_object(moto_s3, "nm000132", annex_key_for(f), small)
+        threshold = 1024
+        files, payloads = [], {}
+        for index in range(n_small + n_large):
+            size = 64 if index < n_small else 4 * threshold
+            payload = bytes((index + 1) % 251 for _ in range(size))
+            f = _dataset_file(f"eeg/f{index:03d}.set", payload)
+            _publish_annex_object(moto_s3, "nm000132", annex_key_for(f), payload)
             files.append(f)
+            payloads[f.path] = payload
 
-        backend = S3Backend(
-            dataset="nm000132", multipart_threshold=1024, multipart_chunksize=8192
-        )
         ranged: list[str] = []
         original = _s3._get_ranged
 
@@ -451,47 +444,28 @@ class TestS3ParallelAndAtomic:
             ranged.append(object_key)
             return original(client, object_key, staging, **kwargs)
 
+        backend = S3Backend(
+            dataset="nm000132",
+            multipart_threshold=threshold,
+            multipart_chunksize=threshold,
+        )
         _s3._get_ranged = spy
         try:
             retry, verify = _policies()
             backend.transfer(
                 files,
                 target_dir=tmp_path,
-                options=_options(max_concurrent_downloads=8),
+                options=_options(max_concurrent_downloads=concurrency),
                 verify=verify,
                 retry=retry,
             )
         finally:
             _s3._get_ranged = original
 
-        assert len(ranged) == 1, "the large file should have been fetched in ranges"
-        assert (tmp_path / "eeg/big.set").read_bytes() == big
-        for index in range(20):
-            assert (tmp_path / f"eeg/small-{index:02d}.tsv").exists()
-
-    def test_parallel_files_all_land(self, moto_s3, tmp_path) -> None:
-        """Every file in a batch is fetched when the pool runs many at once."""
-        files = []
-        for index in range(12):
-            content = f"content-{index}".encode() * 8
-            f = _dataset_file(f"eeg/sub-{index:02d}.set", content)
-            _publish_annex_object(moto_s3, "nm000132", annex_key_for(f), content)
-            files.append((f, content))
-
-        backend = S3Backend(dataset="nm000132")
-        retry, verify = _policies()
-        backend.transfer(
-            [f for f, _ in files],
-            target_dir=tmp_path,
-            options=_options(max_concurrent_downloads=8),
-            verify=verify,
-            retry=retry,
-        )
-
-        for f, content in files:
-            assert (tmp_path / f.path).read_bytes() == content
-
-
+        for f in files:
+            assert (tmp_path / f.path).read_bytes() == payloads[f.path]
+        assert list(tmp_path.rglob("*.part")) == []
+        assert bool(ranged) is expect_ranged
 
     def test_non_annexed_file_aborts_before_writing_anything(
         self, moto_s3, tmp_path
@@ -571,33 +545,3 @@ class TestS3ParallelAndAtomic:
         assert (tmp_path / "eeg/tiny.tsv").read_bytes() == small
         assert list(tmp_path.rglob("*.part")) == []
 
-    def test_part_workers_stay_positive_when_large_files_outnumber_workers(
-        self, moto_s3, tmp_path
-    ) -> None:
-        """Regression: floor division alone gave part_workers == 0.
-
-        With more large files than workers (20 at a cap of 16) the ranged path
-        was disabled again and, worse, max_pool_connections collapsed to 4 while
-        the batch drove 16 concurrent GetObject calls -- below what main used.
-        """
-        payload = b"z" * 4096
-        files = []
-        for index in range(20):
-            f = _dataset_file(f"eeg/big-{index:02d}.set", payload)
-            _publish_annex_object(moto_s3, "nm000132", annex_key_for(f), payload)
-            files.append(f)
-
-        backend = S3Backend(
-            dataset="nm000132", multipart_threshold=1024, multipart_chunksize=1024
-        )
-        retry, verify = _policies()
-        backend.transfer(
-            files,
-            target_dir=tmp_path,
-            options=_options(max_concurrent_downloads=16),
-            verify=verify,
-            retry=retry,
-        )
-
-        for f in files:
-            assert (tmp_path / f.path).read_bytes() == payload
