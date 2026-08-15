@@ -20,6 +20,7 @@ import socket
 
 import pytest
 
+import nemar.s3 as _s3
 from nemar._backend import TransferOptions
 from nemar._models import DatasetFile
 from nemar._retry import RetryPolicy
@@ -380,6 +381,12 @@ class TestS3BackendTransfer:
                 retry=retry,
             )
 
+        # A failed fetch must leave nothing behind under the real name -- the
+        # regression guard for the silent-truncation class -- and no staging
+        # leftovers either.
+        assert not (tmp_path / "eeg/missing.set").exists()
+        assert list(tmp_path.rglob("*.part")) == []
+
 
 @pytest.mark.skipif(
     not _moto_available,
@@ -394,30 +401,72 @@ class TestS3ParallelAndAtomic:
     ``boto3``'s managed transfer instead silently 403s against production.
     """
 
-    def test_ranged_download_reassembles_exact_bytes(
-        self, moto_s3, tmp_path, monkeypatch
-    ) -> None:
-        """A multi-part object must land byte-identical, parts in order."""
+    def test_ranged_download_reassembles_exact_bytes(self, moto_s3, tmp_path) -> None:
+        """A multi-part object must land byte-identical, every range in place."""
         content = bytes(range(256)) * 400  # 102_400 B, non-uniform
         f = _dataset_file("eeg/big.set", content)
         _publish_annex_object(moto_s3, "nm000132", annex_key_for(f), content)
 
-        # Force the ranged path with several parts on a small payload.
-        monkeypatch.setattr("nemar.s3.MULTIPART_THRESHOLD_BYTES", 1024)
-        monkeypatch.setattr("nemar.s3.MULTIPART_CHUNK_BYTES", 8192)
-
-        backend = S3Backend(dataset="nm000132")
+        backend = S3Backend(
+            dataset="nm000132", multipart_threshold=1024, multipart_chunksize=8192
+        )
         retry, verify = _policies()
         backend.transfer(
             [f],
             target_dir=tmp_path,
-            # >1 so part_workers > 1 and the ranged branch is taken
             options=_options(max_concurrent_downloads=4),
             verify=verify,
             retry=retry,
         )
 
         assert (tmp_path / "eeg/big.set").read_bytes() == content
+
+    def test_large_file_still_ranges_in_a_batch_of_many_small_ones(
+        self, moto_s3, tmp_path
+    ) -> None:
+        """Regression: budgeting depth off the batch size killed the ranged path.
+
+        ``part_workers`` was derived from ``len(files)``, so any batch of at
+        least ``max_concurrency`` files collapsed it to 1 and the multipart path
+        never ran -- precisely the batch shape a multi-GB object shows up in.
+        Depth is now budgeted off the count of large files instead.
+        """
+        big = bytes(range(256)) * 400
+        files = [_dataset_file("eeg/big.set", big)]
+        _publish_annex_object(moto_s3, "nm000132", annex_key_for(files[0]), big)
+        for index in range(20):  # > max_concurrent_downloads
+            small = f"small-{index}".encode()
+            f = _dataset_file(f"eeg/small-{index:02d}.tsv", small)
+            _publish_annex_object(moto_s3, "nm000132", annex_key_for(f), small)
+            files.append(f)
+
+        backend = S3Backend(
+            dataset="nm000132", multipart_threshold=1024, multipart_chunksize=8192
+        )
+        ranged: list[str] = []
+        original = _s3._get_ranged
+
+        def spy(client, object_key, staging, **kwargs):
+            ranged.append(object_key)
+            return original(client, object_key, staging, **kwargs)
+
+        _s3._get_ranged = spy
+        try:
+            retry, verify = _policies()
+            backend.transfer(
+                files,
+                target_dir=tmp_path,
+                options=_options(max_concurrent_downloads=8),
+                verify=verify,
+                retry=retry,
+            )
+        finally:
+            _s3._get_ranged = original
+
+        assert len(ranged) == 1, "the large file should have been fetched in ranges"
+        assert (tmp_path / "eeg/big.set").read_bytes() == big
+        for index in range(20):
+            assert (tmp_path / f"eeg/small-{index:02d}.tsv").exists()
 
     def test_parallel_files_all_land(self, moto_s3, tmp_path) -> None:
         """Every file in a batch is fetched when the pool runs many at once."""
@@ -441,49 +490,7 @@ class TestS3ParallelAndAtomic:
         for f, content in files:
             assert (tmp_path / f.path).read_bytes() == content
 
-    def test_success_leaves_no_staging_file(self, moto_s3, tmp_path) -> None:
-        """The .part file must be renamed away, not left beside the result."""
-        content = b"tidy" * 32
-        f = _dataset_file("eeg/tidy.set", content)
-        _publish_annex_object(moto_s3, "nm000132", annex_key_for(f), content)
 
-        backend = S3Backend(dataset="nm000132")
-        retry, verify = _policies()
-        backend.transfer(
-            [f],
-            target_dir=tmp_path,
-            options=_options(),
-            verify=verify,
-            retry=retry,
-        )
-
-        assert (tmp_path / "eeg/tidy.set").exists()
-        assert list(tmp_path.rglob("*.part")) == []
-
-    def test_failure_leaves_no_truncated_file_at_final_path(
-        self, moto_s3, tmp_path
-    ) -> None:
-        """A failed fetch must not leave a short file under the real name.
-
-        This is the regression guard for the silent-truncation class: writing
-        straight to the final path made a partial download indistinguishable
-        from a complete one.
-        """
-        f = _dataset_file("eeg/never.set", b"never published")
-
-        backend = S3Backend(dataset="nm000132")
-        retry, verify = _policies()
-        with pytest.raises(S3Error):
-            backend.transfer(
-                [f],
-                target_dir=tmp_path,
-                options=_options(),
-                verify=verify,
-                retry=retry,
-            )
-
-        assert not (tmp_path / "eeg/never.set").exists()
-        assert list(tmp_path.rglob("*.part")) == []
 
     def test_non_annexed_file_aborts_before_writing_anything(
         self, moto_s3, tmp_path

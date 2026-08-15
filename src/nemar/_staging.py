@@ -23,15 +23,20 @@ from pathlib import Path
 
 from nemar._constants import PARTIAL_SUFFIX
 
-__all__ = ["commit", "discard", "staged", "staging_path"]
+__all__ = ["staged", "staging_path"]
 
 
 def staging_path(final: Path) -> Path:
-    """Return the staging path used while ``final`` is being written."""
+    """Return the staging path used while ``final`` is being written.
+
+    Deliberately beside the target rather than in a global temp directory:
+    :func:`os.replace` is only atomic within a filesystem, so staging elsewhere
+    would silently degrade into a copy across a mount boundary.
+    """
     return final.with_name(final.name + PARTIAL_SUFFIX)
 
 
-def commit(staging: Path, final: Path) -> None:
+def _commit(staging: Path, final: Path) -> None:
     """Flush ``staging`` durably and move it onto ``final`` atomically.
 
     The fsync matters as much as the rename: ``os.replace`` orders the
@@ -46,20 +51,22 @@ def commit(staging: Path, final: Path) -> None:
     os.replace(staging, final)
 
 
-def discard(staging: Path) -> None:
-    """Remove a staging file, ignoring the case where it never appeared."""
-    staging.unlink(missing_ok=True)
-
-
 @contextmanager
 def staged(final: Path) -> Iterator[Path]:
     """Yield a staging path that is renamed onto ``final`` on clean exit.
 
-    On an exception the staging file is left in place deliberately: a resumable
-    backend can pick up from those bytes on the next run, and it cannot be
-    confused for finished output because it does not carry the final name.
+    On an exception the staging file is removed. Keeping it would only pay off
+    for a backend that resumes from those bytes, and none does today: the S3
+    fetch reopens ``"wb"`` or re-truncates, so a leftover ``.part`` would be
+    dead weight that the next run overwrites anyway. Cleaning up here keeps the
+    invariant in one place rather than splitting it between this module and
+    each caller's error handler.
     """
     final.parent.mkdir(parents=True, exist_ok=True)
     staging = staging_path(final)
-    yield staging
-    commit(staging, final)
+    try:
+        yield staging
+    except BaseException:
+        staging.unlink(missing_ok=True)
+        raise
+    _commit(staging, final)

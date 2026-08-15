@@ -22,7 +22,6 @@ vocabulary rather than maintaining disjoint duplicates.
 
 from __future__ import annotations
 
-import concurrent.futures
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -33,6 +32,7 @@ from tqdm.auto import tqdm
 from nemar._backend import TransferOptions
 from nemar._endpoint import DataEndpoint
 from nemar._models import DatasetFile
+from nemar._pool import run_batch
 from nemar._retry import RetryPolicy, _RetryableError, _RetryFreshError
 from nemar._verification import (
     VerifyPolicy,
@@ -111,32 +111,21 @@ class PythonBackend:
                 unit_scale=True,
                 unit_divisor=1024,
             ) as progress:
-                with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=max_concurrent_downloads
-                ) as executor:
-                    futures = [
-                        executor.submit(
-                            _transfer_one_with_python,
-                            file,
-                            target_dir,
-                            retry,
-                            verify,
-                            progress,
-                            stream_timeout,
-                            client,
-                        )
-                        for file in files
-                    ]
-                    errors: list[BaseException] = []
-                    for future in concurrent.futures.as_completed(futures):
-                        exc = future.exception()
-                        if exc is not None:
-                            errors.append(exc)
-                    if errors:
-                        head = "; ".join(str(e) for e in errors[:3])
-                        raise TransferError(
-                            f"{len(errors)} file(s) failed during transfer: {head}"
-                        ) from errors[0]
+                run_batch(
+                    lambda file: _transfer_one_with_python(
+                        file,
+                        target_dir,
+                        retry,
+                        verify,
+                        progress,
+                        stream_timeout,
+                        client,
+                    ),
+                    files,
+                    workers=max_concurrent_downloads,
+                    error_cls=TransferError,
+                    label="transfer",
+                )
 
 
 def _transfer_one_with_python(
