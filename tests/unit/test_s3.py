@@ -379,3 +379,141 @@ class TestS3BackendTransfer:
                 verify=verify,
                 retry=retry,
             )
+
+
+@pytest.mark.skipif(
+    not _moto_available,
+    reason="moto / boto3 not installed (dev group); install to run S3 chain tests.",
+)
+class TestS3ParallelAndAtomic:
+    """Parallel files, ranged parts, and the staging-file guarantee.
+
+    The bucket is public-read but private-list, so an anonymous ``HeadObject``
+    is denied. Ranged parts are therefore driven from the manifest's ``size``,
+    never from a HEAD probe — these tests pin that, because reaching for
+    ``boto3``'s managed transfer instead silently 403s against production.
+    """
+
+    def test_ranged_download_reassembles_exact_bytes(
+        self, moto_s3, tmp_path, monkeypatch
+    ) -> None:
+        """A multi-part object must land byte-identical, parts in order."""
+        content = bytes(range(256)) * 400  # 102_400 B, non-uniform
+        f = _dataset_file("eeg/big.set", content)
+        _publish_annex_object(moto_s3, "nm000132", annex_key_for(f), content)
+
+        # Force the ranged path with several parts on a small payload.
+        monkeypatch.setattr("nemar.s3.MULTIPART_THRESHOLD_BYTES", 1024)
+        monkeypatch.setattr("nemar.s3.MULTIPART_CHUNK_BYTES", 8192)
+
+        backend = S3Backend(dataset="nm000132")
+        retry, verify = _policies()
+        backend.transfer(
+            [f],
+            target_dir=tmp_path,
+            # >1 so part_workers > 1 and the ranged branch is taken
+            options=_options(max_concurrent_downloads=4),
+            verify=verify,
+            retry=retry,
+        )
+
+        assert (tmp_path / "eeg/big.set").read_bytes() == content
+
+    def test_parallel_files_all_land(self, moto_s3, tmp_path) -> None:
+        """Every file in a batch is fetched when the pool runs many at once."""
+        files = []
+        for index in range(12):
+            content = f"content-{index}".encode() * 8
+            f = _dataset_file(f"eeg/sub-{index:02d}.set", content)
+            _publish_annex_object(moto_s3, "nm000132", annex_key_for(f), content)
+            files.append((f, content))
+
+        backend = S3Backend(dataset="nm000132")
+        retry, verify = _policies()
+        backend.transfer(
+            [f for f, _ in files],
+            target_dir=tmp_path,
+            options=_options(max_concurrent_downloads=8),
+            verify=verify,
+            retry=retry,
+        )
+
+        for f, content in files:
+            assert (tmp_path / f.path).read_bytes() == content
+
+    def test_success_leaves_no_staging_file(self, moto_s3, tmp_path) -> None:
+        """The .part file must be renamed away, not left beside the result."""
+        content = b"tidy" * 32
+        f = _dataset_file("eeg/tidy.set", content)
+        _publish_annex_object(moto_s3, "nm000132", annex_key_for(f), content)
+
+        backend = S3Backend(dataset="nm000132")
+        retry, verify = _policies()
+        backend.transfer(
+            [f],
+            target_dir=tmp_path,
+            options=_options(),
+            verify=verify,
+            retry=retry,
+        )
+
+        assert (tmp_path / "eeg/tidy.set").exists()
+        assert list(tmp_path.rglob("*.part")) == []
+
+    def test_failure_leaves_no_truncated_file_at_final_path(
+        self, moto_s3, tmp_path
+    ) -> None:
+        """A failed fetch must not leave a short file under the real name.
+
+        This is the regression guard for the silent-truncation class: writing
+        straight to the final path made a partial download indistinguishable
+        from a complete one.
+        """
+        f = _dataset_file("eeg/never.set", b"never published")
+
+        backend = S3Backend(dataset="nm000132")
+        retry, verify = _policies()
+        with pytest.raises(S3Error):
+            backend.transfer(
+                [f],
+                target_dir=tmp_path,
+                options=_options(),
+                verify=verify,
+                retry=retry,
+            )
+
+        assert not (tmp_path / "eeg/never.set").exists()
+        assert list(tmp_path.rglob("*.part")) == []
+
+    def test_non_annexed_file_aborts_before_writing_anything(
+        self, moto_s3, tmp_path
+    ) -> None:
+        """The batch-atomic miss is detected up front, not mid-batch.
+
+        Resolving every annex key before fetching means the fallback layer
+        inherits a clean directory instead of one half-populated by objects
+        written before the miss.
+        """
+        payload = b"good bytes" * 4
+        good = _dataset_file("eeg/good.set", payload)
+        _publish_annex_object(moto_s3, "nm000132", annex_key_for(good), payload)
+        bad = DatasetFile(
+            path="dataset_description.json",
+            url="https://example/dataset_description.json",
+            size=12,
+            git_sha1="0" * 40,
+        )
+
+        backend = S3Backend(dataset="nm000132")
+        retry, verify = _policies()
+        with pytest.raises(S3Error, match="not annexed"):
+            backend.transfer(
+                [good, bad],
+                target_dir=tmp_path,
+                options=_options(),
+                verify=verify,
+                retry=retry,
+            )
+
+        # The annexed file must NOT have been written: the miss is pre-flighted.
+        assert not (tmp_path / "eeg/good.set").exists()

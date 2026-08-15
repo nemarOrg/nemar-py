@@ -15,3 +15,20 @@ import re
 
 DEFAULT_DATA_URL = "https://data.nemar.org/"
 DATASET_ID_RE = re.compile(r"^(nm|on)\d{6}$")
+
+#: Suffix for the staging file a transfer writes into before it is renamed
+#: into place. Downloading straight to the final path means an interrupted
+#: transfer leaves a short file that is indistinguishable from a complete one
+#: until something re-hashes it; staging + :func:`os.replace` makes a partial
+#: file impossible to mistake for a finished one.
+PARTIAL_SUFFIX = ".part"
+
+#: Read/write chunk for streamed bodies and hashing (1 MiB).
+CHUNK_BYTES = 1024 * 1024
+
+#: Objects at or above this size are fetched in parallel ranged parts rather
+#: than as one stream. Below it the per-part overhead outweighs the gain.
+MULTIPART_THRESHOLD_BYTES = 64 * 1024 * 1024
+
+#: Size of each ranged part of a multipart download.
+MULTIPART_CHUNK_BYTES = 16 * 1024 * 1024

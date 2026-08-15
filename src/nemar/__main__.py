@@ -62,23 +62,26 @@ def _merge_scopes(
     *,
     stimuli: bool,
     derivatives: bool,
+    sourcedata: bool = False,
 ) -> list[str] | None:
-    """Combine explicit ``--scope`` with ``--stimuli`` / ``--derivatives``.
+    """Combine explicit ``--scope`` with the scope convenience flags.
 
     If the caller passed ``--scope`` explicitly we honor it untouched
     (their list is the contract). Otherwise we keep the orchestrator's
-    default of ``raw`` and additionally include ``stimuli`` and/or
-    ``derivatives`` when their convenience flags are set.
+    default of ``raw`` and additionally include ``stimuli``,
+    ``derivatives`` and/or ``sourcedata`` when their flags are set.
     """
     if explicit:
         return explicit
-    if not (stimuli or derivatives):
+    if not (stimuli or derivatives or sourcedata):
         return None
     scopes = ["raw"]
     if stimuli:
         scopes.append("stimuli")
     if derivatives:
         scopes.append("derivatives")
+    if sourcedata:
+        scopes.append("sourcedata")
     return scopes
 
 
@@ -320,6 +323,17 @@ def download_cli(
             ),
         ),
     ] = False,
+    sourcedata: Annotated[
+        bool,
+        typer.Option(
+            "--sourcedata",
+            help=(
+                "Include the ``sourcedata`` scope alongside the default "
+                "``raw`` scope. ``sourcedata/`` holds the original "
+                "pre-BIDS distribution as published upstream."
+            ),
+        ),
+    ] = False,
     no_data: Annotated[
         bool,
         typer.Option(
@@ -369,7 +383,9 @@ def download_cli(
         datatype=datatype,
         suffix=suffix,
         extension=extension,
-        scope=_merge_scopes(scope, stimuli=stimuli, derivatives=derivatives),
+        scope=_merge_scopes(
+            scope, stimuli=stimuli, derivatives=derivatives, sourcedata=sourcedata
+        ),
         pipeline=pipeline,
         entity=entity,
     )

@@ -44,6 +44,7 @@ nemar.download(dataset="nm000132", target_dir="data/nm000132")
 | `--no-data`               | Sidecars only — skip annexed binaries               |
 | `--stimuli`               | Add `stimuli/` scope                                |
 | `--derivatives`           | Add `derivatives/` scope                            |
+| `--sourcedata`            | Add `sourcedata/` scope — the original pre-BIDS distribution |
 | `--metadata-timeout S`    | Override 30 s metadata timeout                      |
 | `--verbose`               | Echo resolved parameters before transfer            |
 
@@ -72,7 +73,21 @@ nemar-py download nm000132 --derivatives --pipeline eeglab --subject 001
 
 # Metadata sweep — sidecars only, no big binaries
 nemar-py download nm000132 --no-data -o nm000132-metadata
+
+# The original pre-BIDS distribution, exactly as the authors published it
+nemar-py download nm000341 --scope sourcedata -o nm000341-original
 ```
+
+### `sourcedata/` — the original upstream distribution
+
+Many NEMAR deposits carry a `sourcedata/` tree holding the **original,
+pre-BIDS files** as distributed by the dataset authors, alongside a
+`sourcedata_provenance.json` recording each file's upstream name, size and
+SHA-256. That makes NEMAR usable as a mirror of the original source when the
+upstream host is slow, gated, or gone.
+
+`sourcedata` is **not** fetched by default — `--scope sourcedata` gets only
+that tree, while `--sourcedata` adds it alongside the default `raw` scope.
 
 ```python
 import nemar

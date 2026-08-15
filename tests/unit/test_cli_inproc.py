@@ -216,6 +216,45 @@ def test_cli_stimuli_and_derivatives_merge_with_default_scope(monkeypatch) -> No
     assert seen["scope"] == ["raw", "stimuli", "derivatives"]
 
 
+def test_cli_sourcedata_merges_with_default_scope(monkeypatch) -> None:
+    """``--sourcedata`` expands to ``scope=['raw', 'sourcedata']``."""
+    seen: dict = {}
+    monkeypatch.setattr(_cli, "download", lambda **kwargs: seen.update(kwargs))
+
+    result = runner.invoke(_cli.app, ["download", "nm000132", "--sourcedata"])
+
+    assert result.exit_code == 0, result.stderr
+    assert seen["scope"] == ["raw", "sourcedata"]
+
+
+def test_cli_all_scope_flags_merge(monkeypatch) -> None:
+    """The three scope flags compose in a stable order."""
+    seen: dict = {}
+    monkeypatch.setattr(_cli, "download", lambda **kwargs: seen.update(kwargs))
+
+    result = runner.invoke(
+        _cli.app,
+        ["download", "nm000132", "--stimuli", "--derivatives", "--sourcedata"],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert seen["scope"] == ["raw", "stimuli", "derivatives", "sourcedata"]
+
+
+def test_cli_explicit_scope_wins_over_sourcedata_flag(monkeypatch) -> None:
+    """An explicit ``--scope`` also overrides ``--sourcedata``."""
+    seen: dict = {}
+    monkeypatch.setattr(_cli, "download", lambda **kwargs: seen.update(kwargs))
+
+    result = runner.invoke(
+        _cli.app,
+        ["download", "nm000132", "--scope", "raw", "--sourcedata"],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert seen["scope"] == ["raw"]
+
+
 def test_cli_explicit_scope_wins_over_convenience_flags(monkeypatch) -> None:
     """An explicit ``--scope`` is the contract; convenience flags step aside."""
     seen: dict = {}
