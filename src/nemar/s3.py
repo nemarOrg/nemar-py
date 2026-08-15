@@ -111,8 +111,12 @@ def _get_whole(
 ) -> None:
     """Stream one object into ``staging`` with a single unsigned GetObject."""
     resp = client.get_object(Bucket=NEMAR_S3_BUCKET, Key=object_key)
-    with open(staging, "wb") as handle:
-        _drain(resp["Body"], handle, progress)
+    # closing() wraps the body before open() is attempted: if opening the file
+    # raises (ENOSPC, EMFILE, a read-only mount), _drain never runs, and an
+    # unclosed body pins its pooled connection for as long as the traceback is
+    # retained.
+    with closing(resp["Body"]) as body, open(staging, "wb") as handle:
+        _drain(body, handle, progress)
 
 
 def _get_ranged(
@@ -147,9 +151,9 @@ def _get_ranged(
             Key=object_key,
             Range=f"bytes={start}-{end}",
         )
-        with open(staging, "r+b") as handle:
+        with closing(resp["Body"]) as body, open(staging, "r+b") as handle:
             handle.seek(start)
-            _drain(resp["Body"], handle, progress)
+            _drain(body, handle, progress)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         # list() forces every future, so a failing range raises here rather
@@ -394,7 +398,10 @@ class S3Backend:
             1 for file, _ in keyed if (file.size or 0) >= self.multipart_threshold
         )
         file_workers = min(max_concurrency, len(keyed)) or 1
-        part_workers = max_concurrency // large if large else 1
+        # Clamped to >= 1: floor division alone yields 0 once there are more
+        # large files than workers (20 large files at a cap of 16), which both
+        # disabled the ranged path again and starved the connection pool.
+        part_workers = max(1, max_concurrency // large) if large else 1
 
         try:
             client = boto3.client(
@@ -403,8 +410,12 @@ class S3Backend:
                 config=Config(
                     signature_version=UNSIGNED,
                     # Every in-flight part needs its own pooled connection, or
-                    # the added parallelism just queues on the pool.
-                    max_pool_connections=file_workers * part_workers + 4,
+                    # botocore opens one outside the pool and discards it on
+                    # release -- a fresh TLS handshake per object. At most
+                    # `large` workers fetch ranges (part_workers each) while the
+                    # rest stream whole files, so 2x the cap bounds it without
+                    # over-provisioning the way file_workers * part_workers did.
+                    max_pool_connections=2 * max_concurrency + 4,
                     retries={"max_attempts": 5, "mode": "standard"},
                 ),
             )

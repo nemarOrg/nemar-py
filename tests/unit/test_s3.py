@@ -381,9 +381,10 @@ class TestS3BackendTransfer:
                 retry=retry,
             )
 
-        # A failed fetch must leave nothing behind under the real name -- the
-        # regression guard for the silent-truncation class -- and no staging
-        # leftovers either.
+        # Nothing is left behind under the real name. Note this object is
+        # below the multipart threshold, so it takes the unstaged path and
+        # get_object fails before any file is opened -- the staged path's
+        # truncation guarantee is pinned by test_staging.py instead.
         assert not (tmp_path / "eeg/missing.set").exists()
         assert list(tmp_path.rglob("*.part")) == []
 
@@ -569,3 +570,34 @@ class TestS3ParallelAndAtomic:
         assert (tmp_path / "eeg/big.set").read_bytes() == big
         assert (tmp_path / "eeg/tiny.tsv").read_bytes() == small
         assert list(tmp_path.rglob("*.part")) == []
+
+    def test_part_workers_stay_positive_when_large_files_outnumber_workers(
+        self, moto_s3, tmp_path
+    ) -> None:
+        """Regression: floor division alone gave part_workers == 0.
+
+        With more large files than workers (20 at a cap of 16) the ranged path
+        was disabled again and, worse, max_pool_connections collapsed to 4 while
+        the batch drove 16 concurrent GetObject calls -- below what main used.
+        """
+        payload = b"z" * 4096
+        files = []
+        for index in range(20):
+            f = _dataset_file(f"eeg/big-{index:02d}.set", payload)
+            _publish_annex_object(moto_s3, "nm000132", annex_key_for(f), payload)
+            files.append(f)
+
+        backend = S3Backend(
+            dataset="nm000132", multipart_threshold=1024, multipart_chunksize=1024
+        )
+        retry, verify = _policies()
+        backend.transfer(
+            files,
+            target_dir=tmp_path,
+            options=_options(max_concurrent_downloads=16),
+            verify=verify,
+            retry=retry,
+        )
+
+        for f in files:
+            assert (tmp_path / f.path).read_bytes() == payload

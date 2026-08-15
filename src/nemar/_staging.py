@@ -43,11 +43,11 @@ def _commit(staging: Path, final: Path) -> None:
     directory entry, not the file's data, so without it a power loss can leave
     a correctly-named file holding unwritten blocks.
     """
-    fd = os.open(staging, os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+    # Opened for append rather than read: on Windows ``os.fsync`` maps to
+    # ``FlushFileBuffers``, which needs a handle with write access and fails on
+    # a read-only one. ``"ab"`` writes nothing and does not truncate.
+    with open(staging, "ab") as handle:
+        os.fsync(handle.fileno())
     os.replace(staging, final)
 
 
@@ -81,7 +81,10 @@ def staged(final: Path) -> Iterator[Path]:
     staging = staging_path(final)
     try:
         yield staging
+        # Inside the guard: a failure in the fsync-or-rename step would
+        # otherwise orphan the .part, which is the one outcome this module
+        # promises cannot happen.
+        _commit(staging, final)
     except BaseException:
         staging.unlink(missing_ok=True)
         raise
-    _commit(staging, final)

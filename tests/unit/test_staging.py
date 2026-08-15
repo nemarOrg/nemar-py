@@ -159,3 +159,45 @@ def test_direct_creates_parent_directories(tmp_path: Path) -> None:
         destination.write_bytes(b"x")
 
     assert final.exists()
+
+
+def test_staged_removes_the_partial_when_commit_itself_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A failing fsync/rename must not orphan the .part.
+
+    ``_commit`` used to run outside the guard, so an EIO/ENOSPC fsync or a
+    rename onto a directory left the staging file behind -- the one outcome
+    this module promises cannot happen.
+    """
+    final = tmp_path / "out.bin"
+    monkeypatch.setattr(
+        os, "fsync", lambda fd: (_ for _ in ()).throw(OSError(5, "I/O error"))
+    )
+
+    with pytest.raises(OSError, match="I/O error"):
+        with staged(final) as staging:
+            staging.write_bytes(b"payload")
+
+    assert not final.exists()
+    assert list(tmp_path.glob(f"*{PARTIAL_SUFFIX}")) == []
+
+
+def test_commit_fsync_uses_a_writable_handle(tmp_path: Path) -> None:
+    """Windows' fsync maps to FlushFileBuffers, which needs write access.
+
+    An O_RDONLY descriptor fails there, which would break every staged (large)
+    fetch on Windows while passing on the Linux-only CI matrix.
+    """
+    import inspect
+
+    from nemar import _staging
+
+    source = inspect.getsource(_staging._commit)
+    assert "O_RDONLY" not in source
+    # And it still works, without truncating what was written.
+    final = tmp_path / "out.bin"
+    staging = staging_path(final)
+    staging.write_bytes(b"payload")
+    _commit(staging, final)
+    assert final.read_bytes() == b"payload"
