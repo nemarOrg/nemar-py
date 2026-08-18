@@ -20,6 +20,7 @@ import socket
 
 import pytest
 
+import nemar.s3 as _s3
 from nemar._backend import TransferOptions
 from nemar._models import DatasetFile
 from nemar._retry import RetryPolicy
@@ -379,3 +380,168 @@ class TestS3BackendTransfer:
                 verify=verify,
                 retry=retry,
             )
+
+        # Nothing is left behind under the real name. Note this object is
+        # below the multipart threshold, so it takes the unstaged path and
+        # get_object fails before any file is opened -- the staged path's
+        # truncation guarantee is pinned by test_staging.py instead.
+        assert not (tmp_path / "eeg/missing.set").exists()
+        assert list(tmp_path.rglob("*.part")) == []
+
+
+@pytest.mark.skipif(
+    not _moto_available,
+    reason="moto / boto3 not installed (dev group); install to run S3 chain tests.",
+)
+class TestS3ParallelAndAtomic:
+    """Parallel files, ranged parts, and the staging-file guarantee.
+
+    The bucket is public-read but private-list, so an anonymous ``HeadObject``
+    is denied. Ranged parts are therefore driven from the manifest's ``size``,
+    never from a HEAD probe — these tests pin that, because reaching for
+    ``boto3``'s managed transfer instead silently 403s against production.
+    """
+
+    @pytest.mark.parametrize(
+        ("n_small", "n_large", "concurrency", "expect_ranged"),
+        [
+            pytest.param(0, 1, 4, True, id="one-large-gets-ranged"),
+            pytest.param(12, 0, 8, False, id="all-small-goes-wide"),
+            # The regression that mattered: a batch far larger than the worker
+            # cap still has to range its one big object. Budgeting depth off
+            # len(files) collapsed part_workers to 1 here, so multipart never
+            # ran in the batch shape a multi-GB object actually appears in.
+            pytest.param(20, 1, 8, True, id="large-among-many-small"),
+            # And with more large files than workers, depth clamps to 1 rather
+            # than floor-dividing to 0 (which also starved the connection pool).
+            pytest.param(0, 20, 16, False, id="more-large-than-workers"),
+        ],
+    )
+    def test_batch_lands_byte_exact_across_shapes(
+        self, moto_s3, tmp_path, n_small, n_large, concurrency, expect_ranged
+    ) -> None:
+        """Every file lands byte-identical, whatever the batch shape.
+
+        Shape matters because depth and breadth are budgeted against each
+        other: a lone big object wants every worker on its ranges, a pile of
+        sidecars wants breadth, and the mixed case is where that arithmetic has
+        twice been wrong.
+        """
+        threshold = 1024
+        files, payloads = [], {}
+        for index in range(n_small + n_large):
+            size = 64 if index < n_small else 4 * threshold
+            payload = bytes((index + 1) % 251 for _ in range(size))
+            f = _dataset_file(f"eeg/f{index:03d}.set", payload)
+            _publish_annex_object(moto_s3, "nm000132", annex_key_for(f), payload)
+            files.append(f)
+            payloads[f.path] = payload
+
+        ranged: list[str] = []
+        original = _s3._get_ranged
+
+        def spy(client, object_key, staging, **kwargs):
+            ranged.append(object_key)
+            return original(client, object_key, staging, **kwargs)
+
+        backend = S3Backend(
+            dataset="nm000132",
+            multipart_threshold=threshold,
+            multipart_chunksize=threshold,
+        )
+        _s3._get_ranged = spy
+        try:
+            retry, verify = _policies()
+            backend.transfer(
+                files,
+                target_dir=tmp_path,
+                options=_options(max_concurrent_downloads=concurrency),
+                verify=verify,
+                retry=retry,
+            )
+        finally:
+            _s3._get_ranged = original
+
+        for f in files:
+            assert (tmp_path / f.path).read_bytes() == payloads[f.path]
+        assert list(tmp_path.rglob("*.part")) == []
+        assert bool(ranged) is expect_ranged
+
+    def test_non_annexed_file_aborts_before_writing_anything(
+        self, moto_s3, tmp_path
+    ) -> None:
+        """The batch-atomic miss is detected up front, not mid-batch.
+
+        Resolving every annex key before fetching means the fallback layer
+        inherits a clean directory instead of one half-populated by objects
+        written before the miss.
+        """
+        payload = b"good bytes" * 4
+        good = _dataset_file("eeg/good.set", payload)
+        _publish_annex_object(moto_s3, "nm000132", annex_key_for(good), payload)
+        bad = DatasetFile(
+            path="dataset_description.json",
+            url="https://example/dataset_description.json",
+            size=12,
+            git_sha1="0" * 40,
+        )
+
+        backend = S3Backend(dataset="nm000132")
+        retry, verify = _policies()
+        with pytest.raises(S3Error, match="not annexed"):
+            backend.transfer(
+                [good, bad],
+                target_dir=tmp_path,
+                options=_options(),
+                verify=verify,
+                retry=retry,
+            )
+
+        # The annexed file must NOT have been written: the miss is pre-flighted.
+        assert not (tmp_path / "eeg/good.set").exists()
+
+    def test_small_files_skip_staging_but_large_ones_use_it(
+        self, moto_s3, tmp_path
+    ) -> None:
+        """Staging is paid for where it matters, not per sidecar.
+
+        A rename per file is a metadata round-trip that does not parallelise
+        (~14x fewer small files/s on Lustre), and a truncated sidecar is caught
+        by the post-transfer size/hash gate. So only objects at or over the
+        multipart threshold are staged.
+        """
+        seen: list[str] = []
+        original = _s3.staged
+
+        def spy(path):
+            seen.append(path.name)
+            return original(path)
+
+        big = b"b" * 4096
+        small = b"s" * 16
+        files = [
+            _dataset_file("eeg/big.set", big),
+            _dataset_file("eeg/tiny.tsv", small),
+        ]
+        for f, payload in zip(files, (big, small)):
+            _publish_annex_object(moto_s3, "nm000132", annex_key_for(f), payload)
+
+        backend = S3Backend(dataset="nm000132", multipart_threshold=1024)
+        _s3.staged = spy
+        try:
+            retry, verify = _policies()
+            backend.transfer(
+                files,
+                target_dir=tmp_path,
+                options=_options(),
+                verify=verify,
+                retry=retry,
+            )
+        finally:
+            _s3.staged = original
+
+        assert seen == ["big.set"], "only the large object should be staged"
+        assert (tmp_path / "eeg/big.set").read_bytes() == big
+        assert (tmp_path / "eeg/tiny.tsv").read_bytes() == small
+        assert list(tmp_path.rglob("*.part")) == []
+

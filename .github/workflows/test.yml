@@ -31,8 +31,12 @@ jobs:
           # backend's real-import test runs in CI. The minimum-Python job
           # below stays lean (no extra) to prove the default install works
           # without datalad.
+          # moto[server] backs the S3Backend transfer tests. Without it they
+          # silently skip, which left the S3 backend with no CI coverage at
+          # all -- the tests existed but never ran here.
           pip install -e ".[datalad]" \
-            ruff pyright pytest pytest-cov pytest-httpserver trustme hypothesis build
+            ruff pyright pytest pytest-cov pytest-httpserver trustme hypothesis build \
+            "moto[server]"
           sudo apt-get update && sudo apt-get install -y aria2
       - name: Lint
         run: ruff check

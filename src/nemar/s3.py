@@ -60,8 +60,11 @@ shape the canonical source uses.
 
 from __future__ import annotations
 
+import concurrent.futures
 from collections.abc import Sequence
+from contextlib import closing
 from pathlib import Path, PurePosixPath
+from typing import Any, BinaryIO
 
 import boto3
 from botocore import UNSIGNED
@@ -69,14 +72,95 @@ from botocore.config import Config
 from tqdm.auto import tqdm
 
 from nemar._backend import TransferOptions
+from nemar._constants import (
+    CHUNK_BYTES,
+    MULTIPART_CHUNK_BYTES,
+    MULTIPART_THRESHOLD_BYTES,
+)
 from nemar._models import DatasetFile
+from nemar._pool import run_batch
 from nemar._retry import RetryPolicy
+from nemar._staging import direct, staged
 from nemar._verification import VerifyPolicy
 from nemar.errors import S3Error
 
 NEMAR_S3_BUCKET = "nemar"
 NEMAR_S3_REGION = "us-east-2"
 NEMAR_S3_HOST = "https://nemar.s3.us-east-2.amazonaws.com"
+
+
+def _drain(body: Any, handle: BinaryIO, progress: tqdm) -> None:
+    """Copy a streaming S3 body into ``handle``, crediting progress as it goes.
+
+    Streamed rather than buffered so a multi-GB object never sits in memory,
+    and the bar advances per chunk so a large fetch does not look stalled.
+
+    The body is closed even when the copy raises. Left open, a failed
+    mid-stream read never returns its connection to the pool, and because the
+    traceback is retained the socket stays pinned -- enough of those and the
+    pool is exhausted and every later request pays a fresh TLS handshake.
+    """
+    with closing(body):
+        for chunk in body.iter_chunks(chunk_size=CHUNK_BYTES):
+            handle.write(chunk)
+            progress.update(len(chunk))
+
+
+def _get_whole(
+    client: Any, object_key: str, staging: Path, *, progress: tqdm
+) -> None:
+    """Stream one object into ``staging`` with a single unsigned GetObject."""
+    resp = client.get_object(Bucket=NEMAR_S3_BUCKET, Key=object_key)
+    # closing() wraps the body before open() is attempted: if opening the file
+    # raises (ENOSPC, EMFILE, a read-only mount), _drain never runs, and an
+    # unclosed body pins its pooled connection for as long as the traceback is
+    # retained.
+    with closing(resp["Body"]) as body, open(staging, "wb") as handle:
+        _drain(body, handle, progress)
+
+
+def _get_ranged(
+    client: Any,
+    object_key: str,
+    staging: Path,
+    *,
+    size: int,
+    workers: int,
+    chunk: int,
+    progress: tqdm,
+) -> None:
+    """Fetch one object as parallel byte ranges into ``staging``.
+
+    The object length comes from the **manifest**, never from ``HeadObject``:
+    this bucket is public-read but private-list, so an anonymous HEAD is denied
+    (403). That is also why ``boto3``'s managed transfer (``download_fileobj``
+    + ``TransferConfig``) cannot be used here — it probes with a HEAD first.
+    Driving the ranges ourselves keeps the single-unsigned-GET contract while
+    still saturating more than one connection on a large object.
+
+    Each worker opens its own handle and seeks to its own offset, so the writes
+    never share a file position.
+    """
+    with open(staging, "wb") as handle:
+        handle.truncate(size)
+
+    def part(start: int) -> None:
+        end = min(start + chunk, size) - 1
+        resp = client.get_object(
+            Bucket=NEMAR_S3_BUCKET,
+            Key=object_key,
+            Range=f"bytes={start}-{end}",
+        )
+        with closing(resp["Body"]) as body, open(staging, "r+b") as handle:
+            handle.seek(start)
+            _drain(body, handle, progress)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        # list() forces every future, so a failing range raises here rather
+        # than being dropped and leaving a silently short file. Unlike a batch
+        # of separate files, one bad range makes the whole object garbage, so
+        # fail fast rather than aggregating.
+        list(executor.map(part, range(0, size, chunk)))
 
 
 def _normalize_version(version: str) -> str:
@@ -145,9 +229,7 @@ def version_url(dataset: str, version: str) -> str:
         URL is unsigned and works for any caller.
 
     """
-    return (
-        f"{NEMAR_S3_HOST}/{dataset}/version/{_normalize_version(version)}.json"
-    )
+    return f"{NEMAR_S3_HOST}/{dataset}/version/{_normalize_version(version)}.json"
 
 
 def version_summary_url(dataset: str, version: str) -> str:
@@ -159,8 +241,7 @@ def version_summary_url(dataset: str, version: str) -> str:
     :func:`version_url`.
     """
     return (
-        f"{NEMAR_S3_HOST}/{dataset}/version/"
-        f"{_normalize_version(version)}-summary.json"
+        f"{NEMAR_S3_HOST}/{dataset}/version/{_normalize_version(version)}-summary.json"
     )
 
 
@@ -186,10 +267,7 @@ def archive_url(dataset: str, version: str) -> str:
        :func:`nemar.download_files`) when the archive is not
        yet available.
     """
-    return (
-        f"{NEMAR_S3_HOST}/{dataset}/archives/"
-        f"{_normalize_version(version)}.zip"
-    )
+    return f"{NEMAR_S3_HOST}/{dataset}/archives/{_normalize_version(version)}.zip"
 
 
 def annex_key_for(file: DatasetFile) -> str | None:
@@ -242,14 +320,30 @@ class S3Backend:
     ``transfer`` returns. Every other backend honours the same split.
     """
 
-    def __init__(self, dataset: str, *, max_concurrency: int = 16) -> None:
-        """Bind the backend to one NEMAR dataset id and a concurrency cap."""
+    def __init__(
+        self,
+        dataset: str,
+        *,
+        max_concurrency: int = 16,
+        multipart_threshold: int = MULTIPART_THRESHOLD_BYTES,
+        multipart_chunksize: int = MULTIPART_CHUNK_BYTES,
+    ) -> None:
+        """Bind the backend to one NEMAR dataset id and its transfer tuning.
+
+        The multipart knobs are constructor arguments rather than module
+        globals so callers (and tests) have somewhere to inject them, next to
+        the concurrency cap they interact with.
+        """
         if max_concurrency < 1:
+            raise ValueError(f"max_concurrency must be >= 1, got {max_concurrency}")
+        if multipart_chunksize < 1:
             raise ValueError(
-                f"max_concurrency must be >= 1, got {max_concurrency}"
+                f"multipart_chunksize must be >= 1, got {multipart_chunksize}"
             )
         self.dataset = dataset
         self.max_concurrency = max_concurrency
+        self.multipart_threshold = multipart_threshold
+        self.multipart_chunksize = multipart_chunksize
 
     def transfer(
         self,
@@ -274,22 +368,61 @@ class S3Backend:
         max_concurrency = min(
             self.max_concurrency, max(1, options.max_concurrent_downloads)
         )
+
+        # Resolve every annex key BEFORE fetching anything. The batch-atomic
+        # contract says one non-annexed entry sends the whole batch to the next
+        # layer; doing that check up front means we hand over a clean slate
+        # instead of a directory half-populated by objects fetched before the
+        # miss, which the fallback would then have to redo anyway.
+        keyed: list[tuple[DatasetFile, str]] = []
+        for file in files:
+            key = annex_key_for(file)
+            if key is None:
+                raise S3Error(
+                    f"{file.path!r} is not annexed "
+                    "(no sha256/md5 checksum on the manifest entry); "
+                    "the S3 backend has nothing to fetch."
+                )
+            keyed.append((file, key))
+
+        # Split the budget between files and parts of a single file: many small
+        # files want breadth, a multi-GB object wants depth, and this bucket
+        # serves single objects of 10 GB+.
+        #
+        # Depth is budgeted against how many LARGE files are present, not the
+        # batch size. Dividing by len(keyed) collapsed part_workers to 1 for any
+        # batch of >= max_concurrency files -- which is the normal shape, and
+        # exactly the shape a multi-GB object appears in -- so the ranged path
+        # never ran where it mattered.
+        large = sum(
+            1 for file, _ in keyed if (file.size or 0) >= self.multipart_threshold
+        )
+        file_workers = min(max_concurrency, len(keyed)) or 1
+        # Clamped to >= 1: floor division alone yields 0 once there are more
+        # large files than workers (20 large files at a cap of 16), which both
+        # disabled the ranged path again and starved the connection pool.
+        part_workers = max(1, max_concurrency // large) if large else 1
+
         try:
             client = boto3.client(
                 "s3",
                 region_name=NEMAR_S3_REGION,
                 config=Config(
                     signature_version=UNSIGNED,
-                    max_pool_connections=max_concurrency,
+                    # Every in-flight part needs its own pooled connection, or
+                    # botocore opens one outside the pool and discards it on
+                    # release -- a fresh TLS handshake per object. At most
+                    # `large` workers fetch ranges (part_workers each) while the
+                    # rest stream whole files, so 2x the cap bounds it without
+                    # over-provisioning the way file_workers * part_workers did.
+                    max_pool_connections=2 * max_concurrency + 4,
                     retries={"max_attempts": 5, "mode": "standard"},
                 ),
             )
         except Exception as exc:  # pragma: no cover — defensive
-            raise S3Error(
-                f"failed to construct anonymous S3 client: {exc}"
-            ) from exc
+            raise S3Error(f"failed to construct anonymous S3 client: {exc}") from exc
 
-        total = sum(file.size or 0 for file in files)
+        total = sum(file.size or 0 for file, _ in keyed)
         with tqdm(
             total=total,
             desc="S3",
@@ -297,36 +430,52 @@ class S3Backend:
             unit_scale=True,
             unit_divisor=1024,
         ) as progress:
-            for file in files:
-                key = annex_key_for(file)
-                if key is None:
-                    raise S3Error(
-                        f"{file.path!r} is not annexed "
-                        "(no sha256/md5 checksum on the manifest entry); "
-                        "the S3 backend has nothing to fetch."
-                    )
+
+            def fetch(entry: tuple[DatasetFile, str]) -> None:
+                file, key = entry
                 object_key = f"{self.dataset}/objects/{key}"
                 s3_path = f"{NEMAR_S3_BUCKET}/{object_key}"
-                local_path = target_dir / file.path
-                local_path.parent.mkdir(parents=True, exist_ok=True)
+                size = file.size or 0
+                # Big writes go through a .part and are renamed into place only
+                # once complete, so an interrupted fetch cannot leave a
+                # truncated file under the real name. Small ones are written
+                # directly: a rename per file is a metadata round-trip that
+                # does not parallelise (~14x fewer small files/s on Lustre),
+                # and a short sidecar is caught by the size/hash gate anyway.
+                # A file of unknown size is treated as big -- it is the case we
+                # cannot reason about.
+                big = file.size is None or size >= self.multipart_threshold
+                destination = staged if big else direct
                 try:
-                    # A single unsigned GetObject — no HeadObject, no
-                    # ListObjects — which is all this public-read,
-                    # private-list bucket grants anonymously. Stream to
-                    # disk so large objects never sit fully in memory, and
-                    # advance the bar per chunk so multi-GB fetches don't
-                    # look stalled between files.
-                    resp = client.get_object(
-                        Bucket=NEMAR_S3_BUCKET, Key=object_key
-                    )
-                    with open(local_path, "wb") as fh:
-                        for chunk in resp["Body"].iter_chunks(
-                            chunk_size=1024 * 1024
-                        ):
-                            fh.write(chunk)
-                            progress.update(len(chunk))
+                    with destination(target_dir / file.path) as staging:
+                        if part_workers > 1 and size >= self.multipart_threshold:
+                            _get_ranged(
+                                client,
+                                object_key,
+                                staging,
+                                size=size,
+                                workers=part_workers,
+                                chunk=self.multipart_chunksize,
+                                progress=progress,
+                            )
+                        else:
+                            _get_whole(client, object_key, staging, progress=progress)
                 except Exception as exc:
                     raise S3Error(
-                        f"S3 fetch failed for {file.path!r} "
-                        f"(s3://{s3_path}): {exc}"
+                        f"S3 fetch failed for {file.path!r} (s3://{s3_path}): {exc}"
                     ) from exc
+
+            run_batch(
+                fetch,
+                # Largest first: submitting in manifest order lets a multi-GB
+                # object land last and stall the tail while every other worker
+                # idles. Longest-first is the standard makespan fix.
+                sorted(keyed, key=lambda entry: -(entry[0].size or 0)),
+                workers=file_workers,
+                error_cls=S3Error,
+                # This backend is batch-atomic: one failure sends the whole
+                # batch to the next layer, which re-fetches everything. Carrying
+                # on would download the rest of the dataset only to discard it.
+                fail_fast=True,
+                label="S3 transfer",
+            )

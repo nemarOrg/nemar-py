@@ -37,6 +37,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
+from nemar._constants import CHUNK_BYTES
 from nemar._models import DatasetFile
 from nemar.errors import VerificationError
 
@@ -189,7 +190,7 @@ def file_hash(path: Path, algorithm: Literal["sha256", "md5"]) -> str:
     """
     digest = hashlib.new(algorithm)
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        for chunk in iter(lambda: handle.read(CHUNK_BYTES), b""):
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -208,7 +209,7 @@ def git_blob_sha1(path: Path) -> str:
     digest = hashlib.sha1()  # noqa: S324 — required by git's blob hash format.
     digest.update(b"blob " + str(size).encode("ascii") + b"\x00")
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        for chunk in iter(lambda: handle.read(CHUNK_BYTES), b""):
             digest.update(chunk)
     return digest.hexdigest()
 
