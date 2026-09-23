@@ -12,8 +12,10 @@ calls ``.transfer(...)``. This module owns that selection
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import replace
 from pathlib import Path
+from urllib.parse import quote
 
 from tqdm.auto import tqdm
 
@@ -28,8 +30,8 @@ from nemar._verification import (
     assert_all_present,
     partition_pending,
 )
-from nemar.errors import DataLadError, S3Error
-from nemar.s3 import S3Backend
+from nemar.errors import DataLadError, S3Error, TransferError
+from nemar.s3 import S3Backend, annex_key_for
 
 
 class LayeredBackend:
@@ -52,6 +54,10 @@ class LayeredBackend:
     The default ``fallback_on=(DataLadError,)`` preserves the
     pre-S3 contract for callers that built the wrapper before the
     parameter existed.
+
+    ``serves`` (default: every file) picks the files the primary is asked
+    for; the others go straight to the fallback, so one file the primary
+    cannot fetch no longer sends the whole batch to the next layer.
     """
 
     def __init__(
@@ -60,10 +66,12 @@ class LayeredBackend:
         fallback: TransferBackend,
         *,
         fallback_on: tuple[type[BaseException], ...] = (DataLadError,),
+        serves: Callable[[DatasetFile], bool] | None = None,
     ) -> None:
         self.primary = primary
         self.fallback = fallback
         self.fallback_on = fallback_on
+        self.serves = serves
 
     def transfer(
         self,
@@ -74,26 +82,65 @@ class LayeredBackend:
         verify: VerifyPolicy,
         retry: RetryPolicy,
     ) -> None:
-        """Run primary; on any ``fallback_on`` error, run fallback over ``files``."""
-        try:
-            self.primary.transfer(
-                files,
+        """Run primary over the files it serves, fallback over the rest.
+
+        On any ``fallback_on`` error, the fallback also takes the served files.
+        """
+
+        def run(backend: TransferBackend, batch: Sequence[DatasetFile]) -> None:
+            backend.transfer(
+                batch,
                 target_dir=target_dir,
                 options=options,
                 verify=verify,
                 retry=retry,
             )
-        except self.fallback_on as exc:
-            tqdm.write(
-                f"primary backend failed; falling back to next layer: {exc}"
-            )
-            self.fallback.transfer(
-                files,
-                target_dir=target_dir,
-                options=options,
-                verify=verify,
-                retry=retry,
-            )
+
+        served = [f for f in files if self.serves is None or self.serves(f)]
+        others = [f for f in files if self.serves is not None and not self.serves(f)]
+        if served or self.serves is None:
+            try:
+                run(self.primary, served)
+            except self.fallback_on as exc:
+                tqdm.write(
+                    f"primary backend failed; falling back to next layer: {exc}"
+                )
+                run(self.fallback, served)
+        if others:
+            run(self.fallback, others)
+
+
+class GitHubRawBackend:
+    """Fetch git-tracked files from GitHub's raw CDN at the version tag.
+
+    data.nemar.org answers each git-tracked file (``*_events.tsv``, sidecar
+    JSON) through a GitHub API call, which takes seconds per file and slows
+    down under load; the CDN serves the same blob in a fraction of a second.
+    The post-transfer sweep still checks every file against the manifest's
+    git SHA-1, so the second origin cannot change the content.
+    """
+
+    def __init__(self, github_url: str, revision: str) -> None:
+        repo = github_url.rstrip("/").removesuffix(".git")
+        repo = repo.split("github.com/", 1)[1]
+        self.base = f"https://raw.githubusercontent.com/{repo}/{revision}/"
+
+    def transfer(
+        self,
+        files: Sequence[DatasetFile],
+        *,
+        target_dir: Path,
+        options: TransferOptions,
+        verify: VerifyPolicy,
+        retry: RetryPolicy,
+    ) -> None:
+        PythonBackend().transfer(
+            [replace(f, url=self.base + quote(f.path)) for f in files],
+            target_dir=target_dir,
+            options=options,
+            verify=verify,
+            retry=retry,
+        )
 
 
 def select_backend(
@@ -102,6 +149,7 @@ def select_backend(
     dataset: str | None = None,
     datalad_url: str | None = None,
     revision: str | None = None,
+    github_url: str | None = None,
 ) -> TransferBackend:
     """Resolve ``options.backend`` into a concrete (possibly layered) backend.
 
@@ -115,7 +163,9 @@ def select_backend(
     * ``"python"`` → bare :class:`PythonBackend`. Skip every other layer.
     * ``"s3"`` → bare :class:`~nemar.s3.S3Backend`. No fallback. Requires
       ``dataset``.
-    * ``"auto"`` with ``dataset`` → S3 → DataLad (when advertised) → HTTPS.
+    * ``"auto"`` with ``dataset`` → S3 → GitHub raw (when the metadata names
+      a ``github_url``) → DataLad (when advertised) → HTTPS. S3 takes the
+      annexed files and GitHub raw the git-tracked ones.
     * ``"auto"`` without ``dataset`` (bulk ``download_files`` API) →
       DataLad (when advertised) → HTTPS. The S3 layer is skipped because
       there is no dataset id to derive an annex key against.
@@ -136,14 +186,36 @@ def select_backend(
             )
         return S3Backend(dataset=dataset)
 
-    layers: list[tuple[TransferBackend, tuple[type[BaseException], ...]]] = []
+    layers: list[
+        tuple[
+            TransferBackend,
+            tuple[type[BaseException], ...],
+            Callable[[DatasetFile], bool] | None,
+        ]
+    ] = []
     if requested == "auto" and dataset is not None:
-        layers.append((S3Backend(dataset=dataset), (S3Error,)))
+        # git-tracked files (README, *_events.tsv) have no bucket object
+        layers.append(
+            (
+                S3Backend(dataset=dataset),
+                (S3Error,),
+                lambda file: annex_key_for(file) is not None,
+            )
+        )
+    if requested == "auto" and github_url is not None and revision is not None:
+        layers.append(
+            (
+                GitHubRawBackend(github_url, revision),
+                (TransferError,),
+                lambda file: file.git_sha1 is not None,
+            )
+        )
     if datalad_url is not None and requested in {"auto", "datalad"}:
         layers.append(
             (
                 DataLadBackend(datalad_url=datalad_url, revision=revision),
                 (DataLadError,),
+                None,
             )
         )
 
@@ -156,8 +228,8 @@ def select_backend(
         return https
 
     chain: TransferBackend = https
-    for primary, on in reversed(layers):
-        chain = LayeredBackend(primary, chain, fallback_on=on)
+    for primary, on, serves in reversed(layers):
+        chain = LayeredBackend(primary, chain, fallback_on=on, serves=serves)
     return chain
 
 
