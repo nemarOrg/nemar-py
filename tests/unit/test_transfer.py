@@ -270,7 +270,7 @@ class TestSelectBackendChainShape:
     def test_auto_s3_layer_serves_annexed_files_only(self) -> None:
         chain = self._select(backend="auto", datalad_url=None)
         annexed, tracked = _annexed_and_tracked()
-        assert chain.serves(annexed) and not chain.serves(tracked)
+        assert chain.primary.serves(annexed) and not chain.primary.serves(tracked)
 
     def test_auto_without_datalad_url_returns_two_layer_chain(self) -> None:
         chain = self._select(backend="auto", datalad_url=None)

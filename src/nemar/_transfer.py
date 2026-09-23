@@ -68,7 +68,9 @@ class LayeredBackend:
         self.primary = primary
         self.fallback = fallback
         self.fallback_on = fallback_on
-        self.serves: Callable[[DatasetFile], bool] | None = getattr(
+        # private, so a wrapper used as another wrapper's primary does not
+        # advertise its own primary's predicate
+        self._serves: Callable[[DatasetFile], bool] | None = getattr(
             primary, "serves", None
         )
 
@@ -98,8 +100,8 @@ class LayeredBackend:
         served: list[DatasetFile] = []
         others: list[DatasetFile] = []
         for f in files:
-            (served if self.serves is None or self.serves(f) else others).append(f)
-        if served or self.serves is None:
+            (served if self._serves is None or self._serves(f) else others).append(f)
+        if served or self._serves is None:
             try:
                 run(self.primary, served)
             except self.fallback_on as exc:
