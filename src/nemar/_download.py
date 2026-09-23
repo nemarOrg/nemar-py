@@ -193,7 +193,6 @@ class _MetadataResult:
     selected_tag: str
     datalad_url: str | None
     manifest: VersionManifest
-    github_url: str | None = None
 
 
 def _check_local_compatibility(
@@ -306,13 +305,12 @@ def _fetch_metadata(request: DownloadRequest) -> _MetadataResult:
     ) as client:
         index = client.fetch_index(request.dataset)
         version = index.resolve_version(request.requested_tag)
-        metadata = client.fetch_metadata(index) or {}
+        client.fetch_metadata(index)
         manifest = client.fetch_manifest(index, version)
     return _MetadataResult(
         selected_tag=version.version,
         datalad_url=index.datalad_url,
         manifest=manifest,
-        github_url=(metadata.get("external_links") or {}).get("github_url"),
     )
 
 
@@ -348,7 +346,6 @@ def _transfer_and_verify(
     datalad_url: str | None,
     selected_tag: str,
     manifest_count: int,
-    github_url: str | None = None,
 ) -> None:
     """Guard the target, transfer the pending files, then verify.
 
@@ -406,7 +403,6 @@ def _transfer_and_verify(
             dataset=request.dataset,
             datalad_url=datalad_url,
             revision=selected_tag,
-            github_url=github_url,
         )
         backend.transfer(
             pending,
@@ -467,7 +463,6 @@ def _run(request: DownloadRequest) -> None:
         datalad_url=meta.datalad_url,
         selected_tag=meta.selected_tag,
         manifest_count=len(files),
-        github_url=meta.github_url,
     )
 
 

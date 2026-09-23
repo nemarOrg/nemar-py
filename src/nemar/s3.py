@@ -275,10 +275,10 @@ def annex_key_for(file: DatasetFile) -> str | None:
 
     Returns the SHA256E or MD5E form the bucket layout uses
     (``SHA256E-s<size>--<hex><suffix>``), or ``None`` when the file's
-    checksum is git-tracked (``git_sha1``) or absent. ``None`` is the
-    signal to short-circuit the S3 layer for this file — the caller
-    raises :class:`~nemar.errors.S3Error` so the layered wrapper sends
-    the whole batch to the next layer (DataLad / HTTPS).
+    checksum is git-tracked (``git_sha1``) or absent. ``None`` means the
+    bucket holds no object for the file: :meth:`S3Backend.serves` says so,
+    and the layered wrapper sends the file straight to the next layer
+    (DataLad / HTTPS).
 
     The suffix carries the same role as in git-annex itself: it lets a
     consumer guess the content type from the key. ``path`` is the
@@ -309,11 +309,12 @@ class S3Backend:
     environment that also needs ``boto3`` unsolvable. See
     https://github.com/eegdash/EEGDash/issues/397.
 
-    Failure-mode contract: the **first** S3 miss aborts the whole
-    batch's S3 transfer with :class:`~nemar.errors.S3Error`. The
-    layered wrapper catches it and sends the whole batch to the next
-    layer (DataLad → HTTPS). Backends stay batch-atomic; per-file
-    fallback granularity is intentionally out of the contract.
+    Failure-mode contract: the layered wrapper only hands this backend
+    the files it :meth:`serves`, and the **first** S3 miss aborts that
+    batch's S3 transfer with :class:`~nemar.errors.S3Error`. The wrapper
+    catches it and sends those files to the next layer (DataLad → HTTPS).
+    Backends stay batch-atomic; per-file fallback granularity is
+    intentionally out of the contract.
 
     Hash verification is **not** this backend's job — the orchestrator
     runs :func:`~nemar._verification.assert_all_present` after
@@ -345,6 +346,10 @@ class S3Backend:
         self.multipart_threshold = multipart_threshold
         self.multipart_chunksize = multipart_chunksize
 
+    def serves(self, file: DatasetFile) -> bool:
+        """Return whether the bucket holds an object for ``file`` (it is annexed)."""
+        return annex_key_for(file) is not None
+
     def transfer(
         self,
         files: Sequence[DatasetFile],
@@ -369,11 +374,10 @@ class S3Backend:
             self.max_concurrency, max(1, options.max_concurrent_downloads)
         )
 
-        # Resolve every annex key BEFORE fetching anything. The batch-atomic
-        # contract says one non-annexed entry sends the whole batch to the next
-        # layer; doing that check up front means we hand over a clean slate
-        # instead of a directory half-populated by objects fetched before the
-        # miss, which the fallback would then have to redo anyway.
+        # Resolve every annex key BEFORE fetching anything. A file without one
+        # (possible with a bare downloader="s3") aborts the batch; checking up
+        # front hands over a clean slate instead of a directory half-populated
+        # by objects fetched before the miss.
         keyed: list[tuple[DatasetFile, str]] = []
         for file in files:
             key = annex_key_for(file)

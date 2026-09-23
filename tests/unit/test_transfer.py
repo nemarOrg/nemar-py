@@ -24,10 +24,11 @@ from nemar._datalad import DataLadBackend
 from nemar._models import DatasetFile
 from nemar._retry import RetryPolicy
 from nemar._streaming import PythonBackend
-from nemar._transfer import GitHubRawBackend, LayeredBackend, select_backend
+from nemar._transfer import LayeredBackend, select_backend
 from nemar._verification import VerifyPolicy
 from nemar.errors import DataLadError, S3Error
-from nemar.s3 import S3Backend
+from nemar.s3 import S3Backend, annex_key_for
+from tests.fixtures.factories import make_dataset_file
 
 
 def _make_options(
@@ -189,16 +190,16 @@ class TestLayeredBackendGeneralized:
 
 
 def _annexed_and_tracked() -> tuple[DatasetFile, DatasetFile]:
-    annexed = DatasetFile(
-        path="sub-01/eeg/sub-01_eeg.edf",
-        url="https://x/eeg.edf",
-        size=1,
-        sha256="0" * 64,
-    )
-    tracked = DatasetFile(
-        path="README.md", url="https://x/README.md", size=1, git_sha1="0" * 40
-    )
+    annexed = make_dataset_file("sub-01/eeg/sub-01_eeg.edf", size=1, sha256="0" * 64)
+    tracked = make_dataset_file("README.md", size=1, git_sha1="0" * 40)
     return annexed, tracked
+
+
+class _AnnexOnlyBackend(_RecordingBackend):
+    """A recording stub that, like S3, serves annexed files only."""
+
+    def serves(self, file: DatasetFile) -> bool:
+        return annex_key_for(file) is not None
 
 
 class TestLayeredBackendServes:
@@ -210,13 +211,8 @@ class TestLayeredBackendServes:
 
     def test_unserved_files_skip_the_primary(self, tmp_path: Path) -> None:
         annexed, tracked = _annexed_and_tracked()
-        primary, fallback = _RecordingBackend(), _RecordingBackend()
-        wrapper = LayeredBackend(
-            primary,
-            fallback,
-            fallback_on=(S3Error,),
-            serves=lambda f: f.sha256 is not None,
-        )
+        primary, fallback = _AnnexOnlyBackend(), _RecordingBackend()
+        wrapper = LayeredBackend(primary, fallback, fallback_on=(S3Error,))
         wrapper.transfer(
             [annexed, tracked],
             target_dir=tmp_path,
@@ -226,46 +222,6 @@ class TestLayeredBackendServes:
         )
         assert [call[0] for call in primary.calls] == [(annexed,)]
         assert [call[0] for call in fallback.calls] == [(tracked,)]
-
-
-class TestGitHubRawBackend:
-    """Git-tracked files come from GitHub's CDN at the version tag."""
-
-    def test_rewrites_urls_to_raw_githubusercontent(
-        self, monkeypatch, tmp_path: Path
-    ) -> None:
-        _, tracked = _annexed_and_tracked()
-        seen: list[str] = []
-        monkeypatch.setattr(
-            "nemar._transfer.PythonBackend.transfer",
-            lambda self, files, **kw: seen.extend(f.url for f in files),
-        )
-        GitHubRawBackend(
-            "https://github.com/nemarDatasets/nm000134", "v1.0.3"
-        ).transfer(
-            [tracked],
-            target_dir=tmp_path,
-            options=_opts(),
-            verify=VerifyPolicy(),
-            retry=RetryPolicy.default().with_attempts(0),
-        )
-        assert seen == [
-            "https://raw.githubusercontent.com/nemarDatasets/nm000134/v1.0.3/README.md"
-        ]
-
-    def test_auto_chain_serves_git_tracked_files_from_github(self) -> None:
-        chain = select_backend(
-            TransferOptions(
-                backend="auto", max_concurrent_downloads=1, stream_timeout=60.0
-            ),
-            dataset="nm000134",
-            revision="v1.0.3",
-            github_url="https://github.com/nemarDatasets/nm000134",
-        )
-        annexed, tracked = _annexed_and_tracked()
-        github = chain.fallback
-        assert isinstance(github.primary, GitHubRawBackend)
-        assert github.serves(tracked) and not github.serves(annexed)
 
 
 # ---------------------------------------------------------------------------
