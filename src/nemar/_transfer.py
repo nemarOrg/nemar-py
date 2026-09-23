@@ -12,7 +12,7 @@ calls ``.transfer(...)``. This module owns that selection
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from tqdm.auto import tqdm
@@ -52,6 +52,10 @@ class LayeredBackend:
     The default ``fallback_on=(DataLadError,)`` preserves the
     pre-S3 contract for callers that built the wrapper before the
     parameter existed.
+
+    A primary with a ``serves(file)`` method (the S3 layer) is only asked
+    for the files it serves; the others go straight to the fallback, so one
+    file the primary cannot fetch no longer sends the whole batch down.
     """
 
     def __init__(
@@ -64,6 +68,11 @@ class LayeredBackend:
         self.primary = primary
         self.fallback = fallback
         self.fallback_on = fallback_on
+        # private, so a wrapper used as another wrapper's primary does not
+        # advertise its own primary's predicate
+        self._serves: Callable[[DatasetFile], bool] | None = getattr(
+            primary, "serves", None
+        )
 
     def transfer(
         self,
@@ -74,26 +83,34 @@ class LayeredBackend:
         verify: VerifyPolicy,
         retry: RetryPolicy,
     ) -> None:
-        """Run primary; on any ``fallback_on`` error, run fallback over ``files``."""
-        try:
-            self.primary.transfer(
-                files,
+        """Run primary over the files it serves, fallback over the rest.
+
+        On any ``fallback_on`` error, the fallback also takes the served files.
+        """
+
+        def run(backend: TransferBackend, batch: Sequence[DatasetFile]) -> None:
+            backend.transfer(
+                batch,
                 target_dir=target_dir,
                 options=options,
                 verify=verify,
                 retry=retry,
             )
-        except self.fallback_on as exc:
-            tqdm.write(
-                f"primary backend failed; falling back to next layer: {exc}"
-            )
-            self.fallback.transfer(
-                files,
-                target_dir=target_dir,
-                options=options,
-                verify=verify,
-                retry=retry,
-            )
+
+        served: list[DatasetFile] = []
+        others: list[DatasetFile] = []
+        for f in files:
+            (served if self._serves is None or self._serves(f) else others).append(f)
+        if served or self._serves is None:
+            try:
+                run(self.primary, served)
+            except self.fallback_on as exc:
+                tqdm.write(
+                    f"primary backend failed; falling back to next layer: {exc}"
+                )
+                run(self.fallback, served)
+        if others:
+            run(self.fallback, others)
 
 
 def select_backend(
@@ -116,6 +133,7 @@ def select_backend(
     * ``"s3"`` → bare :class:`~nemar.s3.S3Backend`. No fallback. Requires
       ``dataset``.
     * ``"auto"`` with ``dataset`` → S3 → DataLad (when advertised) → HTTPS.
+      S3 takes the annexed files; the git-tracked ones go straight down.
     * ``"auto"`` without ``dataset`` (bulk ``download_files`` API) →
       DataLad (when advertised) → HTTPS. The S3 layer is skipped because
       there is no dataset id to derive an annex key against.

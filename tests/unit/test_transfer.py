@@ -27,7 +27,8 @@ from nemar._streaming import PythonBackend
 from nemar._transfer import LayeredBackend, select_backend
 from nemar._verification import VerifyPolicy
 from nemar.errors import DataLadError, S3Error
-from nemar.s3 import S3Backend
+from nemar.s3 import S3Backend, annex_key_for
+from tests.fixtures.factories import make_dataset_file
 
 
 def _make_options(
@@ -188,6 +189,41 @@ class TestLayeredBackendGeneralized:
         assert len(fallback.calls) == 1
 
 
+def _annexed_and_tracked() -> tuple[DatasetFile, DatasetFile]:
+    annexed = make_dataset_file("sub-01/eeg/sub-01_eeg.edf", size=1, sha256="0" * 64)
+    tracked = make_dataset_file("README.md", size=1, git_sha1="0" * 40)
+    return annexed, tracked
+
+
+class _AnnexOnlyBackend(_RecordingBackend):
+    """A recording stub that, like S3, serves annexed files only."""
+
+    def serves(self, file: DatasetFile) -> bool:
+        return annex_key_for(file) is not None
+
+
+class TestLayeredBackendServes:
+    """``serves`` keeps the primary for the files it can fetch.
+
+    Without it, one git-tracked file (``README.md``, ``*_events.tsv``) in a
+    batch made the S3 layer raise and sent every recording to HTTPS.
+    """
+
+    def test_unserved_files_skip_the_primary(self, tmp_path: Path) -> None:
+        annexed, tracked = _annexed_and_tracked()
+        primary, fallback = _AnnexOnlyBackend(), _RecordingBackend()
+        wrapper = LayeredBackend(primary, fallback, fallback_on=(S3Error,))
+        wrapper.transfer(
+            [annexed, tracked],
+            target_dir=tmp_path,
+            options=_opts(),
+            verify=VerifyPolicy(),
+            retry=RetryPolicy.default().with_attempts(0),
+        )
+        assert [call[0] for call in primary.calls] == [(annexed,)]
+        assert [call[0] for call in fallback.calls] == [(tracked,)]
+
+
 # ---------------------------------------------------------------------------
 # select_backend — chain shape per (downloader, datalad_url)
 # ---------------------------------------------------------------------------
@@ -230,6 +266,11 @@ class TestSelectBackendChainShape:
         assert isinstance(inner.primary, DataLadBackend)
         assert inner.fallback_on == (DataLadError,)
         assert isinstance(inner.fallback, PythonBackend)
+
+    def test_auto_s3_layer_serves_annexed_files_only(self) -> None:
+        chain = self._select(backend="auto", datalad_url=None)
+        annexed, tracked = _annexed_and_tracked()
+        assert chain.primary.serves(annexed) and not chain.primary.serves(tracked)
 
     def test_auto_without_datalad_url_returns_two_layer_chain(self) -> None:
         chain = self._select(backend="auto", datalad_url=None)
