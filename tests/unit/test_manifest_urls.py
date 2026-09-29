@@ -166,9 +166,11 @@ def test_cross_origin_requests_do_not_forward_client_auth(tmp_path, recovery):
             return httpx.Response(
                 403 if recovery else 302, headers={"Location": PUBLIC}
             )
-        assert str(request.url) == PUBLIC
+        assert str(request.url) in (PUBLIC, PUBLIC + "?download=1")
         assert "authorization" not in request.headers
         assert "cookie" not in request.headers
+        if str(request.url) == PUBLIC:
+            return httpx.Response(302, headers={"Location": PUBLIC + "?download=1"})
         return httpx.Response(200, content=CONTENT)
 
     with httpx.Client(
@@ -179,6 +181,78 @@ def test_cross_origin_requests_do_not_forward_client_auth(tmp_path, recovery):
         assert (
             download_one(file, tmp_path / file.path, client=client) is VerifyResult.OK
         )
+
+
+@pytest.mark.parametrize("bulk", [False, True])
+@pytest.mark.parametrize(
+    "origin", ["https://data.nemar.org:443/", "https://DATA.NEMAR.ORG/"]
+)
+def test_scoped_download_accepts_normalized_origin(
+    monkeypatch, tmp_path, origin, bulk,
+):
+    file = replace(_file(None), url=origin + "start", bytes_url=None)
+    endpoint = DataEndpoint.from_url(origin)
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        if request.url.path == "/start":
+            return httpx.Response(302, headers={"Location": DURABLE})
+        return httpx.Response(200, content=CONTENT)
+
+    original = httpx.Client.__init__
+
+    def patched(self, *args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(handler)
+        original(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.Client, "__init__", patched)
+    if bulk:
+        download_files([file], tmp_path, endpoint=endpoint)
+    else:
+        assert (
+            download_one(file, tmp_path / file.path, endpoint=endpoint)
+            is VerifyResult.OK
+        )
+    assert (tmp_path / file.path).read_bytes() == CONTENT
+    assert seen == ["https://data.nemar.org/start", DURABLE]
+
+
+def test_same_origin_redirect_preserves_token_refresh(tmp_path):
+    class RefreshToken(httpx.Auth):
+        def auth_flow(self, request):
+            request.headers["Authorization"] = "Bearer expired"
+            response = yield request
+            if response.status_code == 401:
+                request.headers["Authorization"] = "Bearer refreshed"
+                yield request
+
+    seen = []
+
+    def handler(request):
+        token = request.headers.get("authorization")
+        seen.append((request.url.path, token))
+        if str(request.url) == DURABLE:
+            return httpx.Response(302, headers={"Location": "/protected"})
+        assert request.url.path == "/protected"
+        if token != "Bearer refreshed":
+            return httpx.Response(401)
+        return httpx.Response(200, content=CONTENT)
+
+    with httpx.Client(
+        transport=httpx.MockTransport(handler),
+        follow_redirects=True,
+        auth=RefreshToken(),
+    ) as client:
+        file = _file(None)
+        assert (
+            download_one(file, tmp_path / file.path, client=client) is VerifyResult.OK
+        )
+    assert (tmp_path / file.path).read_bytes() == CONTENT
+    assert seen[-2:] == [
+        ("/protected", "Bearer expired"),
+        ("/protected", "Bearer refreshed"),
+    ]
 
 
 @pytest.mark.parametrize("version", ["1.0.0", "v1.0.0"])
@@ -232,6 +306,8 @@ def test_compact_manifest_downloads_git_and_annex_files(tmp_path, version):
         ("dataset_id", "../elsewhere"),
         ("version", "../v2"),
         ("version", "."),
+        ("version", " .. "),
+        ("version", " .. /"),
         ("version", "v1/extra"),
     ],
 )

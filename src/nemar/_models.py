@@ -148,7 +148,7 @@ class VersionManifest:
             if not isinstance(dataset, str) or not DATASET_ID_RE.fullmatch(dataset):
                 raise ManifestError("Invalid compact-manifest dataset_id.")
             version = _validate_relative_path(payload["version"]).strip()
-            if not version or version == "." or "/" in version:
+            if not version or version in (".", "..") or "/" in version:
                 raise ManifestError("Invalid compact-manifest version.")
             if version[0].isdigit():
                 version = f"v{version}"

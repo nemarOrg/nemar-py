@@ -390,8 +390,12 @@ def _file_response(
             redirects += 1
             if redirects > client.max_redirects:
                 raise TransferError(f"Too many redirects while downloading {file.path}")
-            request = response.next_request
-            auth = None  # HTTPX has already scoped the redirect's auth headers.
+            next_request = response.next_request
+            if (next_request.url.scheme, next_request.url.netloc) != (
+                request.url.scheme, request.url.netloc
+            ):
+                auth = None
+            request = next_request
 
 
 def _transfer_one_attempt(
