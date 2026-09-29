@@ -104,6 +104,5 @@ nemar.download(
 - File bytes use a layered chain: **S3 → (DataLad) → HTTPS**.
   - **S3** is tried first — anonymous public-read against `nemar.s3.us-east-2.amazonaws.com`, content-addressed at `<dataset>/objects/<git-annex-key>` (`eegdash`-style direct fetch).
   - **DataLad** is an optional middle layer, active only when the `[datalad]` extra is installed *and* the dataset index advertises a `datalad_url`. Absent the extra, this layer is skipped (a missing import is caught and falls through).
-  - **HTTPS** through `data.nemar.org` is the always-available fallback, with Range/206 resume.
+  - **HTTPS** uses the manifest's file URLs, with Range/206 resume. Public annex URLs are unsigned; bucket-policy-excluded datasets may still have expiring signed URLs. A 403 tries the durable `bytes_url` once, following redirects to fresh bytes. If access is still denied, the download fails.
 - BIDS root files (`dataset_description.json`, `participants.tsv`/`json`, `README*`, `CHANGES`, `LICENSE`) are always kept — even with `--include` / `--exclude`.
-

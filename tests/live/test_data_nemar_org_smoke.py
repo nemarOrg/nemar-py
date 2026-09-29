@@ -12,6 +12,8 @@ import httpx
 import pytest
 
 import nemar
+from nemar._models import VersionManifest
+from nemar._verification import VerifyResult
 from nemar.s3 import (
     archive_url,
     s3_object_url,
@@ -24,6 +26,16 @@ pytestmark = pytest.mark.live
 SKIP_REASON = "Set NEMAR_LIVE_TEST=1 to run live smoke tests."
 
 LIVE_DATASET = os.environ.get("NEMAR_LIVE_DATASET", "nm000132")
+
+
+def _public_head(url: str, *, archive: bool = False) -> httpx.Response:
+    response = httpx.head(url, follow_redirects=False, timeout=10.0)
+    if response.status_code == 403:
+        pytest.skip(f"Anonymous S3 access is unavailable: {url}")
+    if archive and response.status_code == 404:
+        pytest.skip(f"Archive has not been published: {url}")
+    assert response.status_code == 200, f"{url}: HTTP {response.status_code}"
+    return response
 
 
 @pytest.mark.skipif(
@@ -75,17 +87,7 @@ def test_on_prefixed_dataset_index_against_live_endpoint() -> None:
     reason=SKIP_REASON,
 )
 def test_s3_canonical_url_serves_an_object() -> None:
-    """An unsigned ``GET`` against ``s3_object_url(...)`` returns 200.
-
-    The S3 contract we surfaced in :mod:`nemar.s3` claims the bucket
-    is publicly readable along the canonical
-    ``<host>/<dataset>/objects/<annex_key>`` path. If NEMAR ever locks
-    the bucket down (switching to mandatory pre-signed URLs only), this
-    test fails and the docstrings + CONTEXT.md need a correction.
-
-    We pick a tiny annex key from the live manifest so the test stays
-    fast — only a ``HEAD`` request is sent, not the body.
-    """
+    """An existing object permits unsigned HEAD when public read is granted."""
     # Find one small SHA256E-keyed file from the live manifest.
     with nemar.NEMARClient() as client:
         index = client.fetch_index(LIVE_DATASET)
@@ -98,10 +100,7 @@ def test_s3_canonical_url_serves_an_object() -> None:
     # component after ``/objects/`` is the canonical key.
     s3_path = file.url.split("/objects/", 1)[1].split("?", 1)[0]
     canonical = s3_object_url(LIVE_DATASET, s3_path)
-    response = httpx.head(canonical, follow_redirects=False, timeout=10.0)
-    assert response.status_code == 200, (
-        f"expected 200 for unsigned {canonical}, got {response.status_code}"
-    )
+    _public_head(canonical)
 
 
 @pytest.mark.skipif(
@@ -111,16 +110,11 @@ def test_s3_canonical_url_serves_an_object() -> None:
 def test_s3_version_url_unsigned_head_returns_200() -> None:
     """``version_url(...)`` resolves the canonical compact manifest.
 
-    Regression guard against NEMAR ever locking down the
-    ``version/<v>.json`` path. ``HEAD`` only — the body would re-fetch
-    something we already exercise via the manifest path.
+    Public-read denial is legitimate for a bucket-policy-excluded dataset.
     """
     latest = nemar.fetch_dataset_index(dataset=LIVE_DATASET).latest
     url = version_url(LIVE_DATASET, latest)
-    response = httpx.head(url, follow_redirects=False, timeout=10.0)
-    assert response.status_code == 200, (
-        f"unsigned HEAD {url} → {response.status_code}"
-    )
+    response = _public_head(url)
     assert response.headers.get("content-type", "").startswith("application/json")
 
 
@@ -132,10 +126,7 @@ def test_s3_version_summary_url_unsigned_head_returns_200() -> None:
     """``version_summary_url(...)`` resolves the lightweight catalog summary."""
     latest = nemar.fetch_dataset_index(dataset=LIVE_DATASET).latest
     url = version_summary_url(LIVE_DATASET, latest)
-    response = httpx.head(url, follow_redirects=False, timeout=10.0)
-    assert response.status_code == 200, (
-        f"unsigned HEAD {url} → {response.status_code}"
-    )
+    _public_head(url)
 
 
 @pytest.mark.skipif(
@@ -145,16 +136,12 @@ def test_s3_version_summary_url_unsigned_head_returns_200() -> None:
 def test_s3_archive_url_unsigned_head_returns_200() -> None:
     """``archive_url(...)`` resolves the whole-dataset ZIP.
 
-    Pins that the archives prefix is publicly readable and that the
-    sizes are at least non-trivial (regression guard against a stub
-    zip). ``HEAD`` only — the body would be multi-GB.
+    Check a non-trivial size when the archive exists and is readable.
+    ``HEAD`` only — the body would be multi-GB.
     """
     latest = nemar.fetch_dataset_index(dataset=LIVE_DATASET).latest
     url = archive_url(LIVE_DATASET, latest)
-    response = httpx.head(url, follow_redirects=False, timeout=10.0)
-    assert response.status_code == 200, (
-        f"unsigned HEAD {url} → {response.status_code}"
-    )
+    response = _public_head(url, archive=True)
     content_length = int(response.headers.get("content-length", "0"))
     assert content_length > 1_000_000, (
         f"archive looks like a stub: only {content_length} bytes"
@@ -183,3 +170,29 @@ def test_manifest_carries_both_git_and_sha256_entries() -> None:
     has_sha256 = any(f.sha256 is not None for f in manifest)
     assert has_git, "expected at least one git-tracked entry in manifest"
     assert has_sha256, "expected at least one sha256-tracked entry in manifest"
+
+
+@pytest.mark.skipif(
+    os.environ.get("NEMAR_LIVE_TEST") != "1", reason=SKIP_REASON,
+)
+def test_compact_manifest_downloads_git_and_annex_bytes(tmp_path) -> None:
+    """Compact manifests resolve durable routes, including annex redirects."""
+    with nemar.NEMARClient() as api, httpx.Client(timeout=30.0) as raw:
+        index = api.fetch_index(LIVE_DATASET)
+        url = version_url(LIVE_DATASET, index.latest)
+        response = raw.get(url)
+        if response.status_code == 403:
+            pytest.skip("Compact S3 manifest is not publicly readable")
+        response.raise_for_status()
+        manifest = VersionManifest.parse(
+            response.json(), manifest_url=url, endpoint=api.endpoint,
+        )
+        for annexed in (False, True):
+            candidates = [f for f in manifest if f.size and f.size < 200_000
+                          and bool(f.sha256 or f.md5) == annexed]
+            assert candidates
+            file = min(candidates, key=lambda f: f.size)
+            assert file.url == file.bytes_url
+            assert nemar.download_one(
+                file, tmp_path / file.path, client=raw,
+            ) is VerifyResult.OK

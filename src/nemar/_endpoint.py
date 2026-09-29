@@ -32,6 +32,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
+import httpx
+
 from nemar.errors import EndpointError
 
 
@@ -40,8 +42,8 @@ class DataEndpoint:
     """The configured NEMAR data origin.
 
     ``url`` is normalized to a single trailing slash. ``scheme`` and ``netloc``
-    are cached at construction so the control-plane redirect-origin check
-    (:meth:`assert_within`, run once per JSON fetch) stays cheap.
+    retain the supplied origin; :meth:`assert_within` compares origins using
+    HTTPX's hostname and default-port normalization.
     """
 
     url: str
@@ -69,8 +71,9 @@ class DataEndpoint:
         The message wording matches ``_models._validate_data_origin`` so the
         existing parser tests keep matching after delegation.
         """
-        parsed = urlparse(url)
-        if parsed.scheme != self.scheme or parsed.netloc != self.netloc:
+        parsed = httpx.URL(url)
+        origin = httpx.URL(self.url)
+        if (parsed.scheme, parsed.netloc) != (origin.scheme, origin.netloc):
             raise EndpointError(
                 "Refusing to download a file outside the configured NEMAR "
                 f"data origin: {url}. This downloader is intentionally "

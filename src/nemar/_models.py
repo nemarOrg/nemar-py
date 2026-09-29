@@ -6,10 +6,11 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from nemar._constants import DATASET_ID_RE
 from nemar._endpoint import DataEndpoint
 from nemar.errors import DatasetIndexError, ManifestError
 
@@ -66,12 +67,10 @@ class DatasetIndex(BaseModel):
 class DatasetFile:
     """A file resolved from a NEMAR manifest.
 
-    The real ``data.nemar.org`` manifest is mixed: small text/config
-    files are served by ``raw.githubusercontent.com`` with a git blob
-    SHA1 hash, while large content-addressed binaries are served by an
-    S3 sibling with a SHA-256 hash. Both cases land here; the verifier
-    picks whichever hash field is populated. Legacy fixtures that still
-    use ``md5`` keep working too.
+    Git-tracked files use the data endpoint; annexed files use S3 with
+    SHA-256 or MD5 verification. ``url`` is the immediate byte source;
+    ``bytes_url`` is the durable route used if that source returns 403
+    (for example, after an excluded dataset's signature expires).
     """
 
     path: str
@@ -80,6 +79,7 @@ class DatasetFile:
     sha256: str | None = None
     md5: str | None = None
     git_sha1: str | None = None
+    bytes_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -88,9 +88,7 @@ class VersionManifest:
 
     Wraps the inventory of :class:`DatasetFile` entries together with the
     manifest URL they were resolved against and the :class:`DataEndpoint`
-    whose origin they must respect. Duplicate-path detection and the
-    origin-scoping rule live on the value type itself so the invariants
-    survive past the parser.
+    used for metadata. File-byte URLs may name other origins.
 
     The path-keyed lookup index lives in a private ``_index`` field built
     eagerly in ``__post_init__``. Building it during construction (instead
@@ -135,14 +133,32 @@ class VersionManifest:
         """Parse common manifest shapes into a ``VersionManifest``.
 
         The public manifest schema is intentionally treated as a small,
-        tolerant seam because NEMAR is still exposing the versioned manifest
-        links. The downloader remains strict about the resolved URL origin
-        (every file's URL must be ``endpoint.assert_within``-valid) and
-        about duplicate paths within a manifest.
+        tolerant seam. File URLs are trusted manifest values; duplicate
+        paths and unsafe relative paths are rejected. Compact S3 manifests
+        use their dataset/version envelope to resolve durable byte routes.
         """
+        version_root = None
+        if (
+            isinstance(payload, Mapping)
+            and isinstance(payload.get("files"), Mapping)
+            and "dataset_id" in payload
+            and "version" in payload
+        ):
+            dataset = payload["dataset_id"]
+            if not isinstance(dataset, str) or not DATASET_ID_RE.fullmatch(dataset):
+                raise ManifestError("Invalid compact-manifest dataset_id.")
+            version = _validate_relative_path(payload["version"]).strip()
+            if not version or version in (".", "..") or "/" in version:
+                raise ManifestError("Invalid compact-manifest version.")
+            if version[0].isdigit():
+                version = f"v{version}"
+            version_root = endpoint.url_for(f"{dataset}/{quote(version, safe='')}/")
         entries = list(_iter_manifest_entries(payload))
         files = tuple(
-            _entry_to_file(entry, manifest_url=manifest_url, endpoint=endpoint)
+            _entry_to_file(
+                entry, manifest_url=manifest_url, endpoint=endpoint,
+                version_root=version_root,
+            )
             for entry in entries
         )
         if not files:
@@ -230,7 +246,8 @@ def _mapping_entries(value: Mapping[str, Any]) -> Iterable[Any]:
 
 
 def _entry_to_file(
-    entry: Any, *, manifest_url: str, endpoint: DataEndpoint
+    entry: Any, *, manifest_url: str, endpoint: DataEndpoint,
+    version_root: str | None = None,
 ) -> DatasetFile:
     """Coerce one manifest entry into a :class:`DatasetFile`.
 
@@ -256,6 +273,7 @@ def _entry_to_file(
     sha256: str | None = None
     md5: str | None = None
     git_sha1: str | None = None
+    raw_bytes_url: Any = None
 
     if isinstance(entry, str):
         raw_path = entry
@@ -274,6 +292,7 @@ def _entry_to_file(
         raw_url = _first_value(
             entry, "url", "bytes_url", "download_url", "downloadUrl", "href"
         )
+        raw_bytes_url = _first_value(entry, "bytes_url")
         if raw_url is None and isinstance(entry.get("urls"), list) and entry["urls"]:
             raw_url = entry["urls"][0]
         size = _coerce_size(_first_value(entry, "size", "bytes", "size_bytes"))
@@ -321,7 +340,13 @@ def _entry_to_file(
         raise ManifestError(f"Unsupported manifest entry type: {type(entry).__name__}")
 
     path = _validate_relative_path(raw_path)
+    if raw_url is None and version_root is not None:
+        raw_url = raw_bytes_url = urljoin(version_root, quote(path, safe="/"))
     url = _resolve_file_url(raw_url, path=path, manifest_url=manifest_url)
+    bytes_url = (
+        _resolve_file_url(raw_bytes_url, path=path, manifest_url=manifest_url)
+        if raw_bytes_url is not None else None
+    )
     # Per-file origin scoping was removed once we confirmed the real
     # NEMAR manifest advertises ``raw.githubusercontent.com`` and S3
     # URLs alongside ``data.nemar.org``. The trust model is now: the
@@ -337,6 +362,7 @@ def _entry_to_file(
         sha256=sha256,
         md5=md5,
         git_sha1=git_sha1,
+        bytes_url=bytes_url,
     )
 
 

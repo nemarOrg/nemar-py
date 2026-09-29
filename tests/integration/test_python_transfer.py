@@ -138,11 +138,6 @@ def test_progress_does_not_overshoot_when_server_ignores_range(
     transport = httpx.MockTransport(handler)
     client = httpx.Client(transport=transport)
 
-    original_stream = httpx.stream
-
-    def patched_stream(method: str, url: str, **kwargs):
-        return client.stream(method, url, **kwargs)
-
     # Track updates via a mock progress object.
     total_updates: list[int] = []
 
@@ -151,7 +146,6 @@ def test_progress_does_not_overshoot_when_server_ignores_range(
             total_updates.append(n)
             return super().update(n)
 
-    httpx.stream = patched_stream
     try:
         # Call _transfer_one_attempt directly so we control the progress object.
         with TrackingProgress(
@@ -162,9 +156,9 @@ def test_progress_does_not_overshoot_when_server_ignores_range(
                 outfile=out,
                 progress=progress,
                 stream_timeout=60.0,
+                client=client,
             )
     finally:
-        httpx.stream = original_stream
         client.close()
 
     assert out.read_bytes() == data
@@ -289,12 +283,6 @@ def test_http_416_on_resume_retries_fresh(tmp_path) -> None:
     transport = httpx.MockTransport(handler)
     client = httpx.Client(transport=transport)
 
-    original_stream = httpx.stream
-
-    def patched_stream(method: str, url: str, **kwargs):
-        return client.stream(method, url, **kwargs)
-
-    httpx.stream = patched_stream
     try:
         with tqdm(
             total=len(data), desc="test", unit="B", unit_scale=True
@@ -306,9 +294,9 @@ def test_http_416_on_resume_retries_fresh(tmp_path) -> None:
                 VerifyPolicy(verify_size=True, verify_hash=True),
                 progress,
                 60.0,
+                client,
             )
     finally:
-        httpx.stream = original_stream
         client.close()
 
     # Round trip: at least one Range attempt that 416'd, then exactly one
@@ -514,8 +502,9 @@ def test_chain_auto_fetches_from_s3_when_available(
     not _moto_available,
     reason="moto / boto3 not installed (dev group); install to run S3 chain tests.",
 )
+@pytest.mark.parametrize("denied", [False, True], ids=["missing", "private"])
 def test_chain_falls_back_to_https_when_s3_misses(
-    moto_s3_chain, nemar_endpoint, tmp_path: Path
+    moto_s3_chain, nemar_endpoint, tmp_path: Path, denied: bool
 ) -> None:
     """When the S3 object is missing, the chain transparently routes
     the whole batch through the HTTPS fallback served by the local
@@ -525,7 +514,15 @@ def test_chain_falls_back_to_https_when_s3_misses(
     file = _publish_single_file_via_fixture(
         nemar_endpoint, path="eeg/sub-001/eeg.set", content=content
     )
-    # Note: deliberately do NOT publish to moto — first S3 GET 404s.
+    if denied:
+        from nemar.s3 import annex_key_for
+
+        moto_s3_chain.put_object(
+            Bucket="nemar", Key=f"nm000132/objects/{annex_key_for(file)}",
+            Body=content,
+        )
+        moto_s3_chain.delete_bucket_policy(Bucket="nemar")
+    # Otherwise the key is missing; both errors must reach the HTTPS layer.
 
     backend = select_backend(
         TransferOptions(

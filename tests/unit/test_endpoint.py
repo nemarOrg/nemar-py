@@ -50,6 +50,14 @@ class TestAssertWithin:
         endpoint = DataEndpoint.from_url("https://data.nemar.org/")
         endpoint.assert_within("https://data.nemar.org/")
 
+    @pytest.mark.parametrize(
+        "origin", ["https://data.nemar.org:443/", "https://DATA.NEMAR.ORG/"]
+    )
+    def test_accepts_equivalent_https_origins(self, origin: str) -> None:
+        canonical = "https://data.nemar.org/"
+        DataEndpoint.from_url(origin).assert_within(canonical + "file")
+        DataEndpoint.from_url(canonical).assert_within(origin + "file")
+
     def test_rejects_cross_origin(self) -> None:
         endpoint = DataEndpoint.from_url("https://data.nemar.org/")
         with pytest.raises(RuntimeError, match="outside the configured NEMAR"):
