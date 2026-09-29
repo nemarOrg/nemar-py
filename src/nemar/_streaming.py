@@ -23,7 +23,8 @@ vocabulary rather than maintaining disjoint duplicates.
 from __future__ import annotations
 
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 import httpx
@@ -65,6 +66,9 @@ class PythonBackend:
     * The progress-bar overshoot fix when a server returns 200
       instead of the requested 206 for a Range request.
     """
+
+    def __init__(self, *, endpoint: DataEndpoint | None = None) -> None:
+        self.endpoint = endpoint
 
     def transfer(
         self,
@@ -121,6 +125,7 @@ class PythonBackend:
                         progress,
                         stream_timeout,
                         client,
+                        endpoint=self.endpoint,
                     ),
                     files,
                     workers=max_concurrent_downloads,
@@ -137,6 +142,8 @@ def _transfer_one_with_python(
     progress: tqdm,
     stream_timeout: float,
     client: httpx.Client | None = None,
+    *,
+    endpoint: DataEndpoint | None = None,
 ) -> None:
     """Drive one file to disk inside the bulk Python transfer.
 
@@ -161,6 +168,7 @@ def _transfer_one_with_python(
         verify=verify,
         stream_timeout=stream_timeout,
         progress=progress,
+        endpoint=endpoint,
     )
     if result is not VerifyResult.OK:
         raise VerificationError(_describe_failure(file, outfile, result))
@@ -203,13 +211,9 @@ def download_one(
         to :class:`VerifyPolicy` (size + hash).
     endpoint
         Optional :class:`~nemar._endpoint.DataEndpoint` to enforce
-        origin scoping at the call site. When supplied, ``file.url``
-        must share the endpoint's scheme + netloc; otherwise
-        :class:`~nemar.errors.EndpointError` is raised before any
-        bytes are fetched. Files produced by
-        :meth:`~nemar._models.VersionManifest.parse` are already origin-scoped;
-        passing ``endpoint`` here is the right move for callers that
-        hand-build a :class:`DatasetFile` from untrusted input.
+        origin scoping. When supplied, both file URLs and every redirect
+        must share its scheme + netloc. Off-origin requests are rejected
+        before being sent. Omit this for normal mixed-origin manifests.
     stream_timeout
         Per-stream HTTP timeout in seconds. Defaults to 60.
 
@@ -232,6 +236,8 @@ def download_one(
     """
     if endpoint is not None:
         endpoint.assert_within(file.url)
+        if file.bytes_url is not None:
+            endpoint.assert_within(file.bytes_url)
     target_path.parent.mkdir(parents=True, exist_ok=True)
     if retry is None:
         retry = RetryPolicy.default()
@@ -251,6 +257,7 @@ def download_one(
             verify=verify,
             stream_timeout=stream_timeout,
             progress=progress,
+            endpoint=endpoint,
         )
     finally:
         progress.close()
@@ -285,6 +292,7 @@ def _stream_with_retries(
     verify: VerifyPolicy,
     stream_timeout: float,
     progress: tqdm,
+    endpoint: DataEndpoint | None = None,
 ) -> VerifyResult:
     """Run one file's stream/retry/verify loop and return the verify outcome.
 
@@ -306,6 +314,7 @@ def _stream_with_retries(
                 policy=retry,
                 force_fresh=force_fresh,
                 client=client,
+                endpoint=endpoint,
             )
             return _verify_check(file, outfile, verify)
         except retry.retryable_exceptions as exc:
@@ -328,6 +337,63 @@ def _stream_with_retries(
     )
 
 
+@contextmanager
+def _file_response(
+    file: DatasetFile,
+    *,
+    client: httpx.Client | None,
+    headers: dict[str, str],
+    stream_timeout: float,
+    endpoint: DataEndpoint | None,
+) -> Iterator[httpx.Response]:
+    """Follow bounded redirects and try the durable route once after a 403.
+
+    HTTPX builds redirect requests (including stripping cross-origin auth).
+    Sending each hop separately lets an explicit endpoint scope reject it
+    before network access. Failed responses are closed before the next GET.
+    """
+    with ExitStack() as stack:
+        if client is None:
+            client = stack.enter_context(_build_oneshot_client(stream_timeout))
+        request = client.build_request(
+            "GET", file.url, headers=headers, timeout=stream_timeout
+        )
+        auth = client.auth
+        fallback = file.bytes_url if file.bytes_url != file.url else None
+        redirects = 0
+        while True:
+            if endpoint is not None:
+                endpoint.assert_within(str(request.url))
+            response = client.send(
+                request, stream=True, follow_redirects=False, auth=auth
+            )
+            stack.callback(response.close)
+            if response.status_code == 403 and fallback is not None:
+                response.close()
+                request = client.build_request(
+                    "GET", fallback, headers=headers, timeout=stream_timeout
+                )
+                original = httpx.URL(file.url)
+                auth = client.auth
+                if (request.url.scheme, request.url.netloc) != (
+                    original.scheme, original.netloc
+                ):
+                    request.headers.pop("authorization", None)
+                    request.headers.pop("cookie", None)
+                    auth = None
+                fallback = None
+                continue
+            if response.next_request is None:
+                yield response
+                return
+            response.close()
+            redirects += 1
+            if redirects > client.max_redirects:
+                raise TransferError(f"Too many redirects while downloading {file.path}")
+            request = response.next_request
+            auth = None  # HTTPX has already scoped the redirect's auth headers.
+
+
 def _transfer_one_attempt(
     file: DatasetFile,
     *,
@@ -337,6 +403,7 @@ def _transfer_one_attempt(
     policy: RetryPolicy | None = None,
     force_fresh: bool = False,
     client: httpx.Client | None = None,
+    endpoint: DataEndpoint | None = None,
 ) -> None:
     """One HTTP attempt for one file.
 
@@ -392,19 +459,10 @@ def _transfer_one_attempt(
     elif file.size is None and staging.exists():
         staging.unlink()
 
-    # Prefer the shared client when one was passed in. The
-    # module-level ``httpx.stream`` fallback exists for callers that
-    # still drive this function directly (e.g. legacy tests) so we do
-    # not break their patched-stream pattern.
-    if client is not None:
-        stream_cm = client.stream(
-            "GET", file.url, headers=request_headers, timeout=stream_timeout
-        )
-    else:
-        stream_cm = httpx.stream(
-            "GET", file.url, headers=request_headers, timeout=stream_timeout
-        )
-    with stream_cm as response:
+    with _file_response(
+        file, client=client, headers=request_headers,
+        stream_timeout=stream_timeout, endpoint=endpoint,
+    ) as response:
         # A 416 against a Range request means the server's view of
         # the object has changed (object shorter than ``local_size``, or
         # replaced). The partial cannot be salvaged. Unlink it, refund
@@ -418,7 +476,7 @@ def _transfer_one_attempt(
             )
         if policy.should_retry_status(response.status_code):
             raise _RetryableError(f"HTTP {response.status_code}")
-        if response.is_error:
+        if not response.is_success:
             raise TransferError(
                 f"HTTP {response.status_code} while downloading {file.path}"
             )

@@ -10,10 +10,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import httpx
 import pytest
 
 from nemar import download_one
 from nemar._models import DatasetFile
+from nemar._staging import staging_path
 from nemar._verification import VerifyResult
 from tests.fixtures.factories import (
     make_blob,
@@ -84,9 +86,14 @@ def test_download_one_resumes_from_partial_via_range(
     target = tmp_path / "ds" / "data" / "big.bin"
     target.parent.mkdir(parents=True, exist_ok=True)
     # Pre-seed the first 1024 bytes so the resume branch fires.
-    target.write_bytes(blob.content[:1024])
+    staging_path(target).write_bytes(blob.content[:1024])
 
-    result = download_one(file, target)
+    seen = []
+    with httpx.Client(event_hooks={"response": [lambda r: seen.append(
+        (r.request.headers.get("range"), r.status_code)
+    )]}) as client:
+        result = download_one(file, target, client=client)
 
     assert result is VerifyResult.OK
     assert target.read_bytes() == blob.content
+    assert seen == [("bytes=1024-", 206)]

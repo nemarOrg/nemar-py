@@ -39,23 +39,18 @@ Where:
 Public-read, private-list
 -------------------------
 
-The bucket's *content* is public: unsigned ``GET`` / ``HEAD`` against
-every URL the helpers below produce returns 200 OK. The bucket's
-*index* is private: ``ListObjects`` requires NEMAR-internal AWS
-credentials. Discovery therefore still goes through
-``data.nemar.org/`` — you cannot enumerate the bucket yourself. Once
-you know ``(dataset, version)`` (from the catalog endpoint, a DataLad
-clone, or hard-coded knowledge), the helpers below let you skip the
-``data.nemar.org`` round-trip entirely.
+Unsigned ``GET`` / ``HEAD`` work for existing objects when the bucket
+policy grants public read to the dataset. Excluded datasets require
+signed URLs; knowing an object key does not grant access. ``ListObjects``
+requires NEMAR-internal credentials, so discovery uses ``data.nemar.org``.
 
-Why bypass ``data.nemar.org``?
-------------------------------
-
-The catalog endpoint serves pre-signed object URLs with
-``X-Amz-Expires=3600`` and transforms the manifest into a flat array
-on every request. Direct S3 access through these helpers has neither:
-URLs do not expire, and the manifest is the compact dict-keyed-by-path
-shape the canonical source uses.
+The data endpoint's ``manifest.json`` now advertises unsigned annex URLs
+for public-read datasets and caches the transformed document. Only a
+bucket-policy-excluded dataset still receives one-hour signed URLs.
+The helpers below expose canonical S3 locations, including the compact
+manifest, but do not check availability or supply credentials.
+Use ``nemar.download`` with its default ``auto`` backend for S3 →
+DataLad → HTTPS fallback; explicit ``downloader="s3"`` has no fallback.
 """
 
 from __future__ import annotations
@@ -131,12 +126,9 @@ def _get_ranged(
 ) -> None:
     """Fetch one object as parallel byte ranges into ``staging``.
 
-    The object length comes from the **manifest**, never from ``HeadObject``:
-    this bucket is public-read but private-list, so an anonymous HEAD is denied
-    (403). That is also why ``boto3``'s managed transfer (``download_fileobj``
-    + ``TransferConfig``) cannot be used here — it probes with a HEAD first.
-    Driving the ranges ourselves keeps the single-unsigned-GET contract while
-    still saturating more than one connection on a large object.
+    The object length comes from the manifest, avoiding a redundant HEAD
+    request before the ranged GETs. Public-read objects support both methods;
+    denial of bucket listing does not prevent HEAD on an existing object.
 
     Each worker opens its own handle and seeks to its own offset, so the writes
     never share a file position.
@@ -197,8 +189,7 @@ def s3_object_url(dataset: str, annex_key: str) -> str:
     -------
     str
         ``https://<NEMAR_S3_HOST>/<dataset>/objects/<annex_key>``. The
-        bucket is publicly readable, so the URL works without
-        credentials.
+        URL requires the dataset to be publicly readable.
 
     """
     return f"{NEMAR_S3_HOST}/{dataset}/objects/{annex_key}"
@@ -207,12 +198,11 @@ def s3_object_url(dataset: str, annex_key: str) -> str:
 def version_url(dataset: str, version: str) -> str:
     """Return the canonical S3 URL for one dataset version's manifest.
 
-    The manifest is a compact JSON document — keyed by file path, with
-    each entry carrying the git-annex content ``key``, ``size``, and
-    ``checksum``. This is the same data ``data.nemar.org`` transforms
-    into its per-request pre-signed manifest, served from its
-    canonical S3 location without the transform and without the
-    1-hour pre-signed URL window.
+    The compact document has a dataset/version envelope and a ``files``
+    mapping keyed by path, with each entry carrying ``key``, ``size`` and
+    ``checksum``. It is the source for the data endpoint's flat manifest.
+    :meth:`~nemar._models.VersionManifest.parse` resolves missing byte URLs
+    through the supplied data endpoint using that envelope.
 
     Parameters
     ----------
@@ -226,7 +216,7 @@ def version_url(dataset: str, version: str) -> str:
     -------
     str
         ``https://<NEMAR_S3_HOST>/<dataset>/version/<v>.json``. The
-        URL is unsigned and works for any caller.
+        URL is unsigned; access depends on the dataset's bucket policy.
 
     """
     return f"{NEMAR_S3_HOST}/{dataset}/version/{_normalize_version(version)}.json"
@@ -255,12 +245,9 @@ def archive_url(dataset: str, version: str) -> str:
 
     .. note::
 
-       **Best-effort availability.** Unlike :func:`version_url` and
-       :func:`version_summary_url` (which we have seen 100 % of the
-       time across the catalog), the archive is a build artifact
-       published asynchronously after a version is cut. A random sample
-       of 40 datasets had archives present for ~92 % of versions;
-       freshly-published versions may not have one for hours or days.
+       **Best-effort availability.** Archives are published asynchronously
+       after a version is cut and may be absent. As with the other S3
+       helpers, anonymous access also depends on the bucket policy.
 
        Callers should ``HEAD`` the URL and fall back to iterating the
        manifest (via :func:`nemar.download` or

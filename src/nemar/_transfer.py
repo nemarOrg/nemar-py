@@ -119,6 +119,7 @@ def select_backend(
     dataset: str | None = None,
     datalad_url: str | None = None,
     revision: str | None = None,
+    endpoint: DataEndpoint | None = None,
 ) -> TransferBackend:
     """Resolve ``options.backend`` into a concrete (possibly layered) backend.
 
@@ -142,7 +143,7 @@ def select_backend(
       :class:`PythonBackend` with a tqdm notice.
     """
     requested = options.backend
-    https = PythonBackend()
+    https = PythonBackend(endpoint=endpoint)
 
     if requested == "python":
         return https
@@ -228,10 +229,10 @@ def download_files(
         Per-file retry policy. Defaults to :meth:`RetryPolicy.default`.
     endpoint
         Optional :class:`~nemar._endpoint.DataEndpoint` used to enforce
-        origin scoping. When supplied, every file's ``url`` must share
-        the endpoint's scheme + netloc; otherwise
-        :class:`~nemar.errors.EndpointError` is raised before any
-        bytes move. When ``None`` (default) no origin check runs —
+        origin scoping. When supplied, every file's ``url``, ``bytes_url``
+        and redirect must share the endpoint's scheme + netloc. File URLs
+        are checked before the batch starts; each redirect is checked before
+        it is sent. When ``None`` (default) no origin check runs —
         matches :func:`download_one`'s default and trusts the caller's
         own scoping (typically inherited from
         :meth:`~nemar._models.VersionManifest.parse`).
@@ -267,12 +268,14 @@ def download_files(
         # one is rejected, leaving partial state for callers to clean up.
         for file in files:
             endpoint.assert_within(file.url)
+            if file.bytes_url is not None:
+                endpoint.assert_within(file.bytes_url)
     if not files:
         return
     # Bulk file lists do not carry a DataLad URL, so the layered backend
     # never applies here. ``select_backend`` with ``datalad_url=None``
     # returns the plain HTTPS adapter.
-    backend = select_backend(options, datalad_url=None)
+    backend = select_backend(options, datalad_url=None, endpoint=endpoint)
     pending = partition_pending(
         list(files),
         target_dir=target,

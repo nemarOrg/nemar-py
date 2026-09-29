@@ -4,9 +4,8 @@ The contract was verified against the official DataLad clones of four
 representative datasets (nm000132, nm000104, on005505, nm000133): every
 git-annex ``nemar-s3`` special remote in those repos points at the
 same bucket, datacenter, and public host, with a uniform per-dataset
-``fileprefix=<dataset>/objects/``. The bucket is publicly readable
-(``curl -I`` returns 200 against unsigned object URLs), so the helper
-returns directly-usable URLs.
+``fileprefix=<dataset>/objects/``. The helpers build unsigned URLs;
+their accessibility depends on each dataset's public-read grant.
 
 If NEMAR ever changes the bucket name, region, or per-dataset path
 layout, these tests fail loudly and tell us exactly where.
@@ -96,11 +95,8 @@ def test_s3_object_url_for_md5e_key() -> None:
 def test_version_url_with_v_prefix() -> None:
     """``version/<v>.json`` is the canonical compact manifest.
 
-    Confirmed against the live bucket: every dataset has this object at
-    the documented path, and an unsigned ``HEAD`` returns 200. The S3
-    manifest is in a different shape from ``data.nemar.org``'s
-    transformed version (dict keyed by path vs. flat array with
-    pre-signed URLs), but it is the same content.
+    The S3 manifest's files mapping differs from the data endpoint's flat
+    array. This test pins URL construction, not public-read availability.
     """
     assert version_url("nm000133", "v1.0.2") == (
         "https://nemar.s3.us-east-2.amazonaws.com/nm000133/version/v1.0.2.json"
@@ -255,12 +251,8 @@ def moto_s3(monkeypatch):
             )
         except client.exceptions.BucketAlreadyOwnedByYou:
             pass
-        # Mirror the real NEMAR bucket's public-read object policy so
-        # the production ``S3Backend`` (which uses ``anon=True``) can
-        # ``GET`` what the test publishes. Without this, moto enforces
-        # the default private-by-default behaviour and 403s anonymous
-        # GETs — which is correct AWS-side semantics but not what the
-        # production bucket exposes.
+        # Model a dataset with a public-read grant. Excluded datasets can
+        # legitimately deny anonymous GETs; chain tests cover that fallback.
         client.put_bucket_policy(
             Bucket="nemar",
             Policy=json.dumps(
@@ -396,10 +388,8 @@ class TestS3BackendTransfer:
 class TestS3ParallelAndAtomic:
     """Parallel files, ranged parts, and the staging-file guarantee.
 
-    The bucket is public-read but private-list, so an anonymous ``HeadObject``
-    is denied. Ranged parts are therefore driven from the manifest's ``size``,
-    never from a HEAD probe — these tests pin that, because reaching for
-    ``boto3``'s managed transfer instead silently 403s against production.
+    Ranged parts use the manifest's size instead of a redundant HEAD probe.
+    Public-read grants permit both GET and HEAD on existing objects.
     """
 
     @pytest.mark.parametrize(
@@ -544,4 +534,3 @@ class TestS3ParallelAndAtomic:
         assert (tmp_path / "eeg/big.set").read_bytes() == big
         assert (tmp_path / "eeg/tiny.tsv").read_bytes() == small
         assert list(tmp_path.rglob("*.part")) == []
-
