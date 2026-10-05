@@ -87,8 +87,8 @@ def select_files(
 
     Three phases, in order:
 
-    1. Apply ``query`` to manifest paths (or pass everything non-dotfile
-       through when the query is empty).
+    1. Apply ``query`` to manifest paths. With an empty query, skip dotfiles
+       by default, but let explicit include patterns select them.
     2. Narrow the result with ``include`` glob patterns (no-op when
        ``include`` is empty).
     3. Subtract ``exclude`` glob patterns, then re-add essential BIDS
@@ -131,6 +131,15 @@ def select_files(
             for matches in include_matches.values()
             for filename in matches
         }
+        if query.is_empty():
+            # Only explicit dot-prefixed patterns opt hidden files in; bare
+            # "**" can match nested dotfiles in wcmatch's MATCHBASE mode.
+            matched_set.update(
+                filename
+                for pattern, matches in include_matches.items()
+                if any(part.startswith(".") for part in pattern.split("/"))
+                for filename in matches
+            )
         matched_set &= included_paths
     else:
         include_matches = {}
