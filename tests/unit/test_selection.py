@@ -413,3 +413,36 @@ def test_zero_match_query_lists_available_entities() -> None:
     assert "001" in message
     assert "002" in message
     assert "003" in message
+
+
+@pytest.mark.parametrize(
+    "include,exclude,expected",
+    [
+        ([], [], ["sub-001/eeg/data.json"]),
+        (["**"], [], ["sub-001/eeg/data.json"]),
+        (["*"], [], ["sub-001/eeg/data.json"]),
+        (["**/*"], [], ["sub-001/eeg/data.json"]),
+        ([".bidsignore"], [], [".bidsignore"]),
+        (["**/.*"], [], [".bidsignore", "sub-001/.notes"]),
+        (["**/.*"], [".notes"], [".bidsignore"]),
+        (["/.bidsignore"], ["/.bidsignore"], []),
+    ],
+)
+def test_explicit_hidden_includes_preserve_defaults(include, exclude, expected):
+    files = _files([
+        "dataset_description.json", ".bidsignore", "sub-001/.notes",
+        "sub-001/eeg/data.json",
+    ])
+    result = select_files(files, query=BidsQuery(), include=include, exclude=exclude)
+    raise_if_unmatched_includes(result, filenames=[f.path for f in files])
+    assert [f.path for f in result.selected] == ["dataset_description.json", *expected]
+
+
+def test_hidden_include_does_not_bypass_bids_query():
+    files = _files(["dataset_description.json", "sub-001/.notes",
+                    "sub-001/eeg/sub-001_task-rest_eeg.json"])
+    result = select_files(
+        files, query=build_bids_query(subject="001"),
+        include=["**/.*"], exclude=[],
+    )
+    assert [f.path for f in result.selected] == ["dataset_description.json"]
